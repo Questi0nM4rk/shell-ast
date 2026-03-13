@@ -1,0 +1,22 @@
+# Source files — not needed by consumers
+src/
+tests/
+docs/
+processor/
+
+# Build tooling
+Makefile
+biome.jsonc
+tsconfig.json
+go.mod
+go.sum
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# dist/ is explicitly included via package.json "files" field
+# wasm_exec.js and shell-ast.wasm in dist/ ship with the package

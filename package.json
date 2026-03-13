@@ -14,15 +14,20 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./semantic": {
+      "import": "./dist/semantic.js",
+      "types": "./dist/semantic.d.ts"
     }
   },
   "files": [
     "dist/"
   ],
   "scripts": {
-    "build:wasm": "GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor",
-    "build:ts": "bun build src/index.ts --outdir dist --target node",
+    "build:wasm": "mkdir -p dist && GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor",
+    "build:ts": "bun build src/index.ts src/semantic.ts --outdir dist --target node && tsc --declaration --emitDeclarationOnly --outDir dist && cp src/wasm_exec.js dist/wasm_exec.js",
     "build": "bun run build:wasm && bun run build:ts",
+    "prepublishOnly": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ tests/"
