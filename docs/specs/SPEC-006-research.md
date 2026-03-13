@@ -3,6 +3,21 @@
 ## Status: Reference
 ## Version: 1.0
 
+---
+
+## Decision
+
+**Use `mvdan/sh` v3 via WASM with a full typed AST serialized to JSON.**
+
+- Tier: 3 (full AST) — handles all cases that regex and tokenizers miss
+- Runtime: WASM, loaded once in Node/Bun — no subprocess, no IPC
+- Parser: `mvdan/sh` — spec-compliant POSIX + Bash, statically typed Go AST
+- Rejected alternatives: tree-sitter-bash (generic child nodes, less precise), ShellCheck (Haskell, no TS API)
+
+See the full comparison below.
+
+---
+
 Captures the research that motivated choosing full AST parsing over simpler approaches.
 
 ---

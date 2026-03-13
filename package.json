@@ -2,6 +2,11 @@
   "name": "shell-ast",
   "version": "0.1.0",
   "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Questi0nM4rk/shell-ast"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,6 +30,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
     "typescript": "^5.8.0",
-    "@types/bun": "latest"
+    "@types/bun": "^1.2.0"
   }
 }

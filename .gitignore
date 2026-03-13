@@ -6,6 +6,7 @@ dist/
 *.wasm
 
 # Go
+# Note: go.sum should be committed — do not add it here
 vendor/
 *.test
 
@@ -22,5 +23,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# Bun
+# Bun lockfiles (bun.lockb = Bun 1.x binary, bun.lock = Bun 2.x text)
+# Consider committing these for reproducible installs.
+bun.lockb
 bun.lock

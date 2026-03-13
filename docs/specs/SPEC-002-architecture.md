@@ -13,7 +13,7 @@
 │                                                             │
 │  parse(src, dialect) → ShellFile                           │
 │  walk(node, visitor) → void                                │
-│  findCalls(ast) → CallNode[]                               │
+│  findCalls(ast) → CallExprNode[]                           │
 │  resolveFlags(call) → ResolvedCall                         │
 │                                                             │
 │  Types: discriminated union (ShellNode = File | Stmt | ...) │
@@ -49,6 +49,7 @@ package main
 
 import (
   "encoding/json"
+  "strings"
   "syscall/js"
   "mvdan.cc/sh/v3/syntax"
 )
@@ -95,42 +96,24 @@ func serializeNode(node syntax.Node) interface{} {
     return nil
   }
   switch n := node.(type) {
-  case *syntax.File:
-    return serializeFile(n)
-  case *syntax.Stmt:
-    return serializeStmt(n)
-  case *syntax.CallExpr:
-    return serializeCallExpr(n)
-  case *syntax.BinaryCmd:
-    return serializeBinaryCmd(n)
-  case *syntax.IfClause:
-    return serializeIfClause(n)
-  case *syntax.WhileClause:
-    return serializeWhileClause(n)
-  case *syntax.ForClause:
-    return serializeForClause(n)
-  case *syntax.CaseClause:
-    return serializeCaseClause(n)
-  case *syntax.Block:
-    return serializeBlock(n)
-  case *syntax.Subshell:
-    return serializeSubshell(n)
-  case *syntax.FuncDecl:
-    return serializeFuncDecl(n)
-  case *syntax.CmdSubst:
-    return serializeCmdSubst(n)
-  case *syntax.Word:
-    return serializeWord(n)
-  case *syntax.Lit:
-    return serializeLit(n)
-  case *syntax.SglQuoted:
-    return serializeSglQuoted(n)
-  case *syntax.DblQuoted:
-    return serializeDblQuoted(n)
-  case *syntax.Redirect:
-    return serializeRedirect(n)
-  case *syntax.Assign:
-    return serializeAssign(n)
+  case *syntax.File:       return serializeFile(n)
+  case *syntax.Stmt:       return serializeStmt(n)
+  case *syntax.CallExpr:   return serializeCallExpr(n)
+  case *syntax.BinaryCmd:  return serializeBinaryCmd(n)
+  case *syntax.IfClause:   return serializeIfClause(n)
+  case *syntax.WhileClause: return serializeWhileClause(n)
+  case *syntax.ForClause:  return serializeForClause(n)
+  case *syntax.CaseClause: return serializeCaseClause(n)
+  case *syntax.Block:      return serializeBlock(n)
+  case *syntax.Subshell:   return serializeSubshell(n)
+  case *syntax.FuncDecl:   return serializeFuncDecl(n)
+  case *syntax.CmdSubst:   return serializeCmdSubst(n)
+  case *syntax.Word:       return serializeWord(n)
+  case *syntax.Lit:        return serializeLit(n)
+  case *syntax.SglQuoted:  return serializeSglQuoted(n)
+  case *syntax.DblQuoted:  return serializeDblQuoted(n)
+  case *syntax.Redirect:   return serializeRedirect(n)
+  case *syntax.Assign:     return serializeAssign(n)
   // ... all remaining types
   default:
     return map[string]interface{}{
@@ -142,7 +125,7 @@ func serializeNode(node syntax.Node) interface{} {
 }
 ```
 
-Each serializer function outputs the node type tag plus all semantically meaningful fields:
+Each serializer outputs the node type tag plus all semantically meaningful fields:
 
 ```go
 func serializeCallExpr(n *syntax.CallExpr) map[string]interface{} {
@@ -177,7 +160,7 @@ func serializeBinaryCmd(n *syntax.BinaryCmd) map[string]interface{} {
 func serializeRedirect(n *syntax.Redirect) map[string]interface{} {
   result := map[string]interface{}{
     "type": "Redirect",
-    "op":   n.Op.String(),  // ">", ">>", "<", "<<", ">&", etc.
+    "op":   n.Op.String(),
     "word": serializeWord(n.Word),
     "pos":  nodePos(n.Pos()),
     "end":  nodePos(n.End()),
@@ -200,11 +183,12 @@ func serializeRedirect(n *syntax.Redirect) map[string]interface{} {
 
 ```
 src/
-  index.ts          — public API: parse, walk, findCalls, resolveFlags
-  types.ts          — ShellNode discriminated union (40+ types)
-  wasm.ts           — WASM loader and bridge
-  walk.ts           — AST walker
-  helpers.ts        — findCalls, resolveFlags
+  index.ts      — public API: parse, walk, findCalls, resolveFlags
+  types.ts      — ShellNode discriminated union (~42 types)
+  wasm.ts       — WASM loader and bridge
+  walk.ts       — AST walker
+  helpers.ts    — findCalls, resolveFlags
+  semantic.ts   — unwrapCall (sudo-aware privilege escalation unwrapper)
 ```
 
 ### WASM Loading (`wasm.ts`)
@@ -218,18 +202,15 @@ let parseFn: ((src: string, dialect?: string) => string) | null = null;
 export async function loadWasm(): Promise<void> {
   if (parseFn !== null) return;
 
-  // Bun/Node WASM loading
   const wasmPath = join(import.meta.dirname, "../dist/shell-ast.wasm");
   const wasmBytes = await readFile(wasmPath);
 
-  // Go WASM runtime shim
-  const go = new Go();
+  const go = new Go(); // Go WASM runtime shim (wasm_exec.js)
   const result = await WebAssembly.instantiate(wasmBytes, go.importObject);
   go.run(result.instance);
 
-  parseFn = (src: string, dialect = "bash") => {
-    return (globalThis as Record<string, unknown>).__shellAstParse(src, dialect) as string;
-  };
+  parseFn = (src: string, dialect = "bash") =>
+    (globalThis as Record<string, unknown>).__shellAstParse(src, dialect) as string;
 }
 
 export function parseRaw(src: string, dialect?: string): string {
@@ -279,8 +260,7 @@ export async function parse(
    ```
 5. JSON marshaled, crosses WASM boundary as string
 6. TypeScript: `JSON.parse()` → typed `ShellFile`
-7. `resolveFlags(call)` → `{ cmd: "sudo", flags: ["-u"], args: ["root", "rm", "-rf", "/"] }`
-   - or with sudo-aware wrapper: `{ cmd: "rm", flags: ["-r", "-f"], args: ["/"] }`
+7. `unwrapCall(call)` → `{ wrapper: "sudo", cmd: "rm", flags: ["-r", "-f"], args: ["/"] }`
 
 ---
 
@@ -294,7 +274,7 @@ GO_SRC    := $(shell find processor -name '*.go')
 $(WASM_OUT): $(GO_SRC)
 	mkdir -p dist
 	GOOS=js GOARCH=wasm go build -o $(WASM_OUT) ./processor
-	cp "$(shell go env GOROOT)/misc/wasm/wasm_exec.js" dist/wasm_exec.js
+	cp "$(shell go env GOROOT)/lib/wasm/wasm_exec.js" dist/wasm_exec.js
 
 .PHONY: build test clean
 build: $(WASM_OUT) bun-build

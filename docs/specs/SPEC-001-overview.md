@@ -10,7 +10,7 @@
 Shell command analysis exists on three tiers of fidelity:
 
 | Tier | Approach | Handles |
-|------|----------|--------|
+|------|----------|---------|
 | 1 | Regex | Simple patterns — fast, brittle, easy to bypass |
 | 2 | Token-level | Quoting/escaping — handles `rm -rf 'path with spaces'` |
 | 3 | Full AST | Flag semantics, pipe structure, redirects, arithmetic, subshells |
@@ -54,7 +54,7 @@ Not useful for:
 
 ### Why Not Use the mvdan/sh Go Library Directly?
 
-For Go programs, `mvdan/sh` is the right choice. But for TypeScript tooling running in Node/Bun/browsers:
+For Go programs, `mvdan/sh` is the right choice. But for TypeScript tooling running in Node/Bun:
 
 1. No runtime Go dependency — everything is WASM
 2. Existing `sh-syntax` API is familiar to the ecosystem
@@ -71,13 +71,12 @@ The gap is solely in what gets serialized. The Go runtime already produces the f
 **What changes:**
 - `processor/structs.go` — full type-switch serializer (replaces `mapNode`)
 - `processor/main.go` — updated WASM exports to return the rich AST
-- TypeScript types — discriminated union for all 40+ node types
+- TypeScript types — discriminated union for all ~42 node types
 - TypeScript API — `parse(src, dialect)` → `ShellFile`
 
 **What stays the same:**
-- `mvdan/sh` version lock (v3)
+- `mvdan/sh` version lock (v3.10.0)
 - WASM compilation pipeline
-- `sh-syntax` formatting API (unchanged — we add, not remove)
 - License (MIT)
 
 ---
@@ -111,13 +110,14 @@ Any TypeScript tool that needs shell semantics:
 
 ### In Scope (v1)
 
-- Full AST serialization for all `mvdan/sh` node types
+- Full AST serialization for all `mvdan/sh` node types (~42)
 - Discriminated union TypeScript types for every node
 - `parse(src, dialect): ShellFile` API
 - `walk(node, visitor)` tree walker
-- Helper: `findCalls(ast): CallNode[]` — extract all command invocations
-- Helper: `resolveFlags(call): { cmd: string, flags: string[], args: string[] }` — canonicalize flags
-- Dialect support: `posix`, `bash`, `mksh` (via `mvdan/sh`'s `syntax.NewParser`)
+- Helper: `findCalls(ast): CallExprNode[]` — extract all command invocations
+- Helper: `resolveFlags(call)` — canonicalize flags (split `-rf` into `["-r", "-f"]`)
+- Helper: `unwrapCall(call)` — sudo-aware privilege escalation unwrapper
+- Dialect support: `posix`, `bash`, `mksh`
 - WASM build pipeline
 - 90%+ test coverage on the TypeScript layer
 
@@ -133,6 +133,6 @@ Any TypeScript tool that needs shell semantics:
 
 ## Relationship to sh-syntax
 
-This is a fork, not a wrapper. We vendor `mvdan/sh` at a pinned version and maintain the Go processor ourselves. Changes to upstream `sh-syntax` are evaluated and cherry-picked if relevant; we don't track it directly.
+This is a fork, not a wrapper. We vendor `mvdan/sh` at a pinned version and maintain the Go processor ourselves.
 
-The npm package name is `shell-ast` (not a scoped fork of `sh-syntax`) because the API surface is intentionally different — we add fields that `sh-syntax` never had, and our JSON schema is not compatible with theirs.
+The npm package name is `shell-ast` (not a scoped `sh-syntax` fork) because the API surface is intentionally different — we expose data that `sh-syntax` never had, and our JSON schema is not compatible with theirs.
