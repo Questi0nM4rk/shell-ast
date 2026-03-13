@@ -1,0 +1,30 @@
+{
+  "name": "shell-ast",
+  "version": "0.1.0",
+  "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build:wasm": "GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor",
+    "build:ts": "bun build src/index.ts --outdir dist --target node",
+    "build": "bun run build:wasm && bun run build:ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/ tests/"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "typescript": "^5.8.0",
+    "@types/bun": "latest"
+  }
+}
