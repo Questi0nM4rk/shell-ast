@@ -29,5 +29,13 @@
       "quoteStyle": "double",
       "trailingCommas": "es5"
     }
-  }
+  },
+  "overrides": [
+    {
+      // wasm_exec.js is a vendored Go standard library file — not ours to lint
+      "includes": ["src/wasm_exec.js"],
+      "linter": { "enabled": false },
+      "formatter": { "enabled": false }
+    }
+  ]
 }
