@@ -37,7 +37,8 @@ The `sh-syntax` use case is "where is this node in the source" — enough for sy
 
 ## mvdan/sh AST Types
 
-Full reference of `syntax.Node` types from `mvdan.cc/sh/v3/syntax`:
+Full reference of `syntax.Node` types from `mvdan.cc/sh/v3/syntax`.
+Source of truth: `mvdan.cc/sh/v3@v3.10.0/syntax/nodes.go`.
 
 ### Statement-Level
 
@@ -61,10 +62,10 @@ type Stmt struct {
 
 type Redirect struct {
   OpPos Pos
-  Op    RedirectOp   // ">", ">>", "<", "<<", etc.
-  N     *Lit         // optional file descriptor number
-  Word  *Word        // target/source
-  Hdoc  *Word        // heredoc body
+  Op    RedirOperator    // ">", ">>", "<", "<<", etc.
+  N     *Lit             // fd number or {varname} in Bash
+  Word  *Word            // target/source
+  Hdoc  *Word            // heredoc body
 }
 ```
 
@@ -83,35 +84,44 @@ type BinaryCmd struct {
 }
 
 type IfClause struct {
-  IfPos, ThenPos, FiPos Pos
-  Cond                  []*Stmt
-  Then                  []*Stmt
-  Elif                  []*IfClause
-  Else                  *ElseClause
-  Last                  []Comment
+  Position Pos            // position of "if", "elif", or "else" token
+  ThenPos  Pos            // position of "then"; empty if this is an "else"
+  FiPos    Pos            // position of "fi"; shared with .Else if non-nil
+  Cond     []*Stmt
+  CondLast []Comment
+  Then     []*Stmt
+  ThenLast []Comment
+  Else     *IfClause     // non-nil for "elif" or "else" branch
+  Last     []Comment     // comments on the first "elif", "else", or "fi"
 }
+
+// Note: there is no separate ElseClause type. "else" is represented as an
+// IfClause with no Cond (ThenPos is zero) chained via Else.
 
 type WhileClause struct {
   WhilePos, DoPos, DonePos Pos
   Until                    bool
   Cond                     []*Stmt
+  CondLast                 []Comment
   Do                       []*Stmt
-  Last                     []Comment
+  DoLast                   []Comment
 }
 
 type ForClause struct {
   ForPos, DoPos, DonePos Pos
   Select                 bool
-  Loop                   Loop   // interface: WordIter | CStyleLoop
+  Braces                 bool // deprecated { } form
+  Loop                   Loop   // interface: *WordIter | *CStyleLoop
   Do                     []*Stmt
-  Last                   []Comment
+  DoLast                 []Comment
 }
 
 type CaseClause struct {
-  Case, Esac Pos
-  Last       []Comment
-  Word       *Word
-  Items      []*CaseItem
+  Case, In, Esac Pos
+  Braces         bool // deprecated mksh form
+  Word           *Word
+  Items          []*CaseItem
+  Last           []Comment
 }
 
 type Block struct {
@@ -128,38 +138,50 @@ type Subshell struct {
 
 type FuncDecl struct {
   Position Pos
-  RsrvWord bool
-  Parens   bool
+  RsrvWord bool   // non-POSIX "function f" style
+  Parens   bool   // with () — only meaningful when RsrvWord=true
   Name     *Lit
   Body     *Stmt
 }
 
-type TimeClause struct {
-  Time Pos
-  PosixFormat bool
-  Stmt *Stmt
-}
-
-type CoprocClause struct {
-  Coproc Pos
-  Name   *Lit
-  Stmt   *Stmt
-}
-
-type LetClause struct {
-  Let   Pos
-  Exprs []ArithExpr
-}
-
-type DeclClause struct {
-  Variant *Lit
-  Opts    []*Word
-  Assigns []*Assign
+type ArithmCmd struct {
+  Left, Right Pos
+  Unsigned    bool  // mksh's ((# expr))
+  X           ArithmExpr
 }
 
 type TestClause struct {
   Left, Right Pos
   X           TestExpr
+}
+
+type DeclClause struct {
+  // Variant is one of: "declare", "local", "export", "readonly", "typeset", "nameref"
+  Variant *Lit
+  Args    []*Assign
+}
+
+type LetClause struct {
+  Let   Pos
+  Exprs []ArithmExpr
+}
+
+type TimeClause struct {
+  Time        Pos
+  PosixFormat bool   // -p flag
+  Stmt        *Stmt
+}
+
+type CoprocClause struct {
+  Coproc Pos
+  Name   *Word   // optional name (a Word, not a Lit)
+  Stmt   *Stmt
+}
+
+type TestDecl struct {
+  Position    Pos
+  Description *Word
+  Body        *Stmt
 }
 ```
 
@@ -173,21 +195,23 @@ type Lit struct {
 
 type SglQuoted struct {
   Left, Right Pos
-  Dollar      bool
+  Dollar      bool    // $'...'
   Value       string
 }
 
 type DblQuoted struct {
   Left, Right Pos
-  Dollar      bool
+  Dollar      bool    // $"..."
   Parts       []WordPart
 }
 
 type CmdSubst struct {
-  Left, Right    Pos
-  Stmts          []*Stmt
-  Last           []Comment
-  RecentlyDefined bool  // $(<file) shorthand
+  Left, Right Pos
+  Stmts       []*Stmt
+  Last        []Comment
+  Backquotes  bool  // deprecated `foo` form
+  TempFile    bool  // mksh's ${ foo;}
+  ReplyVar    bool  // mksh's ${|foo;}
 }
 
 type ParamExp struct {
@@ -197,35 +221,64 @@ type ParamExp struct {
   Length         bool
   Width          bool
   Param          *Lit
-  Index          ArithExpr
-  Slice          *Slice
-  Repl           *Replace
+  Index          ArithmExpr      // ${a[i]}, ${a["k"]}
+  Slice          *Slice          // ${a:x:y}
+  Repl           *Replace        // ${a/x/y}
   Names          ParNamesOperator
-  Exp            *Expansion
+  Exp            *Expansion      // ${a:-b}, ${a#b}, etc.
 }
 
-type ArithExp struct {
+type ArithmExp struct {
   Left, Right Pos
-  Unsigned    bool
-  X           ArithExpr
+  Bracket     bool  // deprecated $[expr] form
+  Unsigned    bool  // mksh's $((# expr))
+  X           ArithmExpr
 }
 
 type ProcSubst struct {
   OpPos, Rparen Pos
-  Op            ProcOperator   // >( or <(
+  Op            ProcOperator   // <( or >(
   Stmts         []*Stmt
   Last          []Comment
 }
 
 type ExtGlob struct {
-  OpPos Pos
-  Op    GlobOperator   // @(, *(, +(, ?(, !(
-  Pattern *Word
+  OpPos   Pos
+  Op      GlobOperator   // ?(, *(, +(, @(, !(
+  Pattern *Lit           // Note: *Lit, not *Word
 }
 
 type BraceExp struct {
-  Sequence bool
+  Sequence bool   // {x..y} range form
   Elems    []*Word
+}
+```
+
+### Supporting Types
+
+```go
+type Word struct {
+  Parts []WordPart
+}
+
+type Assign struct {
+  Append bool       // +=
+  Naked  bool       // without '='
+  Name   *Lit       // must be a valid name
+  Index  ArithmExpr // [i], ["k"]
+  Value  *Word      // =val
+  Array  *ArrayExpr // =(arr)
+}
+
+// Note: Assign has no Op field. Use Append bool to distinguish = vs +=.
+
+type CaseItem struct {
+  Op       CaseOperator
+  OpPos    Pos
+  Comments []Comment
+  Patterns []*Word
+  Stmts    []*Stmt
+  Last     []Comment
 }
 
 type ArrayExpr struct {
@@ -233,6 +286,32 @@ type ArrayExpr struct {
   Elems          []*ArrayElem
   Last           []Comment
 }
+
+type ArrayElem struct {
+  Index    ArithmExpr
+  Value    *Word
+  Comments []Comment
+}
+
+type Comment struct {
+  Hash Pos
+  Text string
+}
+
+// Loop interface: implemented by *WordIter and *CStyleLoop
+type WordIter struct {
+  Name  *Lit
+  InPos Pos
+  Items []*Word
+}
+
+type CStyleLoop struct {
+  Lparen, Rparen Pos
+  Init, Cond, Post ArithmExpr  // each may be nil
+}
+
+// ArithmExpr interface: implemented by *BinaryArithm, *UnaryArithm, *ParenArithm, *Word
+// TestExpr interface:   implemented by *BinaryTest, *UnaryTest, *ParenTest, *Word
 ```
 
 ---
@@ -251,19 +330,28 @@ type ArrayExpr struct {
 
 The following Go types require serializer functions:
 
-**Command nodes** (14):
+**Command nodes** (16):
 `CallExpr`, `BinaryCmd`, `IfClause`, `WhileClause`, `ForClause`, `CaseClause`,
-`Block`, `Subshell`, `FuncDecl`, `TimeClause`, `CoprocClause`, `LetClause`,
-`DeclClause`, `TestClause`
+`Block`, `Subshell`, `FuncDecl`, `ArithmCmd`, `TestClause`, `DeclClause`,
+`LetClause`, `TimeClause`, `CoprocClause`, `TestDecl`
 
 **Word part nodes** (9):
-`Lit`, `SglQuoted`, `DblQuoted`, `CmdSubst`, `ParamExp`, `ArithExp`,
+`Lit`, `SglQuoted`, `DblQuoted`, `CmdSubst`, `ParamExp`, `ArithmExp`,
 `ProcSubst`, `ExtGlob`, `BraceExp`
 
-**Supporting nodes** (8):
-`File`, `Stmt`, `Redirect`, `Assign`, `Word`, `CaseItem`, `Comment`, `ArrayExpr`
+**Supporting nodes** (11):
+`File`, `Stmt`, `Redirect`, `Assign`, `Word`, `CaseItem`, `Comment`,
+`ArrayExpr`, `ArrayElem`, `WordIter`, `CStyleLoop`
 
-Total: ~31 node types, each needing one function.
+**Arithmetic expression nodes** (3, serialized inline):
+`BinaryArithm`, `UnaryArithm`, `ParenArithm`
+(Note: `*Word` also implements `ArithmExpr` — handled by existing `serializeWord`)
+
+**Test expression nodes** (3, serialized inline):
+`BinaryTest`, `UnaryTest`, `ParenTest`
+(Note: `*Word` also implements `TestExpr`)
+
+Total: ~42 serializer functions.
 
 ### Operator String Values
 
@@ -271,20 +359,38 @@ Operators are serialized as strings (via `.String()` method on the enum type):
 
 ```
 BinCmdOperator: "&&", "||", "|", "|&"
-RedirectOp:     ">", ">>", "<", "<<", "<<<", "<>", ">&", "<&", ">|&"
-ParNamesOp:     "@A", "@a", "@k", "@K" (bash-specific)
-GlobOperator:   "@(", "*(", "+(", "?(", "!("
+RedirOperator:  ">", ">>", "<", "<>", "<&", ">&", ">|", "<<", "<<-", "<<<",
+                "&>", "&>>"
+ParNamesOp:     "*", "@"
+GlobOperator:   "?(", "*(", "+(", "@(", "!("
 ProcOperator:   "<(", ">("
-TestOperator:   "-a", "-b", "-c", ... (30+ test operators)
+CaseOperator:   ";;", ";&", ";;&", ";|"
 ```
+
+Note on redirect operators: `&>` (redirect stdout+stderr) and `&>>` (append
+stdout+stderr) are valid Bash operators. There is no `>>&` or `>|&` — those are
+not real operators in `mvdan/sh` or the shell specifications.
 
 ---
 
 ## Test Strategy
 
-Go unit tests in `processor/structs_test.go`:
+Go unit tests in `processor/structs_test.go`.
+The test file imports `strings` and `encoding/json` from stdlib; use
+`github.com/stretchr/testify/assert` for assertions.
 
 ```go
+package main
+
+import (
+  "encoding/json"
+  "strings"
+  "testing"
+
+  "github.com/stretchr/testify/assert"
+  "mvdan.cc/sh/v3/syntax"
+)
+
 func TestSerializeCallExpr(t *testing.T) {
   p := syntax.NewParser()
   f, _ := p.Parse(strings.NewReader("rm -rf /"), "")
@@ -316,12 +422,16 @@ Test cases to cover:
 - Pipeline: `cat /etc/passwd | grep root`
 - Logical: `make && make test`
 - Redirect: `echo foo > /tmp/out`
+- Redirect stderr: `cmd 2>&1`
 - Heredoc: `cat <<EOF`
 - Command substitution: `$(date)`
 - Process substitution: `diff <(ls a) <(ls b)`
-- Arithmetic: `$((x + 1))`
+- Arithmetic expansion: `echo $((x + 1))`
+- Arithmetic command: `((x++))`
 - Double-quoted: `"hello $name"`
 - Sudo with flag-arg pairs: `sudo -u root rm -rf /`
 - Nested subshells: `(cd /tmp && rm -rf *)`
 - Function declaration: `foo() { echo bar; }`
 - For loop: `for f in *.txt; do rm $f; done`
+- Bash array: `arr=(a b c)`
+- Test clause: `[[ -f foo && -d bar ]]`

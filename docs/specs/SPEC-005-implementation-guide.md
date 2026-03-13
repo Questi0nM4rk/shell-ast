@@ -21,8 +21,12 @@ bun --version  # >= 1.2.0
 ```bash
 go mod init github.com/Questi0nM4rk/shell-ast
 go get mvdan.cc/sh/v3@v3.10.0  # pin version
-go mod vendor
+go mod download                 # generates go.sum — commit this file
+go mod vendor                   # optional: vendor/ for reproducible offline builds
 ```
+
+`go.sum` must be committed to version control. It is the cryptographic checksum
+file that ensures reproducible builds. Do not add `go.sum` to `.gitignore`.
 
 ### 1.2 Init TypeScript
 
@@ -33,10 +37,13 @@ bun init
 ### 1.3 Copy Go WASM runtime shim
 
 ```bash
-cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" src/wasm_exec.js
+# Go 1.21+ uses lib/wasm/; earlier versions used misc/wasm/
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" src/wasm_exec.js
 ```
 
-This file must be bundled with the TypeScript package. It's part of Go's standard distribution.
+This file must be bundled with the TypeScript package. It's part of Go's standard
+distribution. The `lib/wasm/` path is canonical for Go 1.21 and later. On older Go
+installations the file is at `$(go env GOROOT)/misc/wasm/wasm_exec.js`.
 
 ---
 
@@ -128,11 +135,12 @@ test-clause:    "[[ -f foo && -d bar ]]"
 Do NOT hand-write types from memory. Use the Go source as authority:
 
 ```bash
-# Print all syntax.Node-implementing types
-grep -n 'func.*Pos()' $(go env GOPATH)/pkg/mod/mvdan.cc/sh/v3@v3.10.0/syntax/syntax.go
+# Print all types that implement syntax.Node (i.e. have Pos/End methods)
+grep -n 'func.*Pos() Pos' $(go env GOPATH)/pkg/mod/mvdan.cc/sh/v3@v3.10.0/syntax/nodes.go
 ```
 
-Alternatively, read `mvdan.cc/sh/v3/syntax/syntax.go` directly — all types are in one file.
+All types are defined in `mvdan.cc/sh/v3/syntax/nodes.go` (not `syntax.go`).
+Operator enum values are in `mvdan.cc/sh/v3/syntax/tokens.go`.
 
 ### 3.2 Validation
 
@@ -190,6 +198,8 @@ A higher-level helper that understands privilege escalation wrappers:
 
 ```typescript
 // src/semantic.ts
+import type { CallExprNode, Word, LitNode } from "./types.js";
+import { resolveFlags } from "./helpers.js";
 
 const SUDO_FLAGS_WITH_ARGS = new Set(["-u", "-g", "-r", "-t", "-T", "-C", "-p", "-U"]);
 const PRIVILEGE_ESCALATORS = new Set(["sudo", "doas", "run0", "su"]);
@@ -200,6 +210,15 @@ export interface UnwrappedCall {
   flags: string[];
   args: string[];
   raw: CallExprNode;
+}
+
+// wordToLit extracts the literal string value from a single-Lit Word.
+// Returns null if the Word contains expansions or is not statically resolvable.
+function wordToLit(w: Word): string | null {
+  if (w.parts.length === 1 && w.parts[0]!.type === "Lit") {
+    return (w.parts[0] as LitNode).value;
+  }
+  return null;
 }
 
 export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
@@ -214,7 +233,7 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
   const rawArgs = call.args.slice(1);
   let i = 0;
   while (i < rawArgs.length) {
-    const lit = wordToLitValue(rawArgs[i]!);
+    const lit = wordToLit(rawArgs[i]!);
     if (lit === null) break;
     if (SUDO_FLAGS_WITH_ARGS.has(lit)) { i += 2; continue; }  // skip -u root
     if (lit.startsWith("-")) { i++; continue; }               // skip -n, --login
@@ -301,12 +320,12 @@ The deferred bugs in `ai-guardrails docs/bugs/hook-bypass-regex-limitations.md` 
 | Milestone | Deliverable | Tests |
 |-----------|------------|-------|
 | M1 | `serializeCallExpr`, `serializeBinaryCmd`, Go tests | Go: 5 tests |
-| M2 | Full Go serializer, all 31 node types | Go: 20 tests |
+| M2 | Full Go serializer (all ~42 node types, including ArithmExpr + TestExpr nodes) | Go: 25 tests |
 | M3 | WASM build pipeline, TypeScript WASM loader | TS: WASM loads |
 | M4 | TypeScript types, `parse()` API | TS: 10 tests |
-| M5 | `walk()`, `findCalls()`, `resolveFlags()` | TS: 15 tests |
-| M6 | `unwrapCall()` sudo-aware unwrapper | TS: 8 tests |
+| M5 | `walk()`, `findCalls()`, `resolveFlags()` | TS: 20 tests |
+| M6 | `unwrapCall()` sudo-aware unwrapper (`src/semantic.ts`) | TS: 10 tests |
 | M7 | 90% coverage, README, first npm publish | — |
 | M8 | Wire into ai-guardrails, retire regex hooks | — |
 
-Estimated scope: ~2000 lines of Go + ~1000 lines of TypeScript.
+Estimated scope: ~2500 lines of Go + ~1200 lines of TypeScript.

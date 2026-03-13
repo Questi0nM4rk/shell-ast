@@ -58,7 +58,7 @@ export interface Stmt extends BaseNode {
 export interface Redirect extends BaseNode {
   type: "Redirect";
   op: RedirectOp;
-  n: LitNode | null;    // fd number, e.g. "2" in 2>&1
+  n: LitNode | null;    // fd number or {varname}, e.g. "2" in 2>&1
   word: Word;
   hdoc: Word | null;
 }
@@ -71,11 +71,11 @@ export interface Word extends BaseNode {
 export interface Assign extends BaseNode {
   type: "Assign";
   name: LitNode | null;
-  index: ArithExpr | null;
-  op: AssignOp;         // "=", "+=", etc.
+  index: ArithmExpr | null;
+  append: boolean;      // true for +=, false for =
+  naked: boolean;       // true when there is no = at all
   value: Word | null;
   array: ArrayExpr | null;
-  naked: boolean;
 }
 
 export interface Comment extends BaseNode {
@@ -99,11 +99,13 @@ export type Command =
   | Block
   | Subshell
   | FuncDecl
+  | ArithmCmd
+  | TestClause
+  | DeclClause
+  | LetClause
   | TimeClause
   | CoprocClause
-  | LetClause
-  | DeclClause
-  | TestClause;
+  | TestDecl;
 
 export interface CallExprNode extends BaseNode {
   type: "CallExpr";
@@ -120,25 +122,24 @@ export interface BinaryCmd extends BaseNode {
 
 export interface IfClause extends BaseNode {
   type: "IfClause";
-  cond: Stmt[];
+  cond: Stmt[];         // empty when this node represents an "else" branch
+  condLast: Comment[];
   then: Stmt[];
-  elif: IfClause[];
-  else: ElseClause | null;
+  thenLast: Comment[];
+  else: IfClause | null; // the "elif" or "else" continuation, if any
   last: Comment[];
 }
 
-export interface ElseClause extends BaseNode {
-  type: "ElseClause";
-  then: Stmt[];
-  last: Comment[];
-}
+// Note: there is no ElseClause type. An "else" branch is an IfClause with
+// empty cond[]. Detect it with: node.type === "IfClause" && node.cond.length === 0
 
 export interface WhileClause extends BaseNode {
   type: "WhileClause";
   until: boolean;
   cond: Stmt[];
+  condLast: Comment[];
   do: Stmt[];
-  last: Comment[];
+  doLast: Comment[];
 }
 
 export interface ForClause extends BaseNode {
@@ -146,7 +147,7 @@ export interface ForClause extends BaseNode {
   select: boolean;
   loop: WordIter | CStyleLoop;
   do: Stmt[];
-  last: Comment[];
+  doLast: Comment[];
 }
 
 export interface WordIter extends BaseNode {
@@ -157,9 +158,9 @@ export interface WordIter extends BaseNode {
 
 export interface CStyleLoop extends BaseNode {
   type: "CStyleLoop";
-  init: ArithExpr | null;
-  cond: ArithExpr | null;
-  post: ArithExpr | null;
+  init: ArithmExpr | null;
+  cond: ArithmExpr | null;
+  post: ArithmExpr | null;
 }
 
 export interface CaseClause extends BaseNode {
@@ -173,8 +174,9 @@ export interface CaseItem extends BaseNode {
   type: "CaseItem";
   patterns: Word[];
   stmts: Stmt[];
+  comments: Comment[];
   last: Comment[];
-  op: CaseOp;   // ";;", ";&", ";;&"
+  op: CaseOp;   // ";;", ";&", ";;&", ";|"
 }
 
 export interface Block extends BaseNode {
@@ -197,6 +199,28 @@ export interface FuncDecl extends BaseNode {
   body: Stmt;
 }
 
+export interface ArithmCmd extends BaseNode {
+  type: "ArithmCmd";
+  unsigned: boolean;     // mksh's ((# expr))
+  x: ArithmExpr;
+}
+
+export interface TestClause extends BaseNode {
+  type: "TestClause";
+  x: TestExpr;
+}
+
+export interface DeclClause extends BaseNode {
+  type: "DeclClause";
+  variant: LitNode;      // "declare", "local", "export", "readonly", "typeset", "nameref"
+  args: Assign[];
+}
+
+export interface LetClause extends BaseNode {
+  type: "LetClause";
+  exprs: ArithmExpr[];
+}
+
 export interface TimeClause extends BaseNode {
   type: "TimeClause";
   posixFormat: boolean;
@@ -205,25 +229,14 @@ export interface TimeClause extends BaseNode {
 
 export interface CoprocClause extends BaseNode {
   type: "CoprocClause";
-  name: LitNode | null;
+  name: Word | null;     // a Word (not LitNode) — may contain expansions
   stmt: Stmt;
 }
 
-export interface LetClause extends BaseNode {
-  type: "LetClause";
-  exprs: ArithExpr[];
-}
-
-export interface DeclClause extends BaseNode {
-  type: "DeclClause";
-  variant: LitNode;
-  opts: Word[];
-  assigns: Assign[];
-}
-
-export interface TestClause extends BaseNode {
-  type: "TestClause";
-  x: TestExpr;
+export interface TestDecl extends BaseNode {
+  type: "TestDecl";
+  description: Word;
+  body: Stmt;
 }
 ```
 
@@ -238,7 +251,7 @@ export type WordPart =
   | DblQuoted
   | CmdSubst
   | ParamExp
-  | ArithExp
+  | ArithmExp
   | ProcSubst
   | ExtGlob
   | BraceExp;
@@ -264,7 +277,9 @@ export interface CmdSubst extends BaseNode {
   type: "CmdSubst";
   stmts: Stmt[];
   last: Comment[];
-  recentlyDefined: boolean;  // $(<file) shorthand
+  backquotes: boolean;   // deprecated `foo` form
+  tempFile: boolean;     // mksh's ${ foo;}
+  replyVar: boolean;     // mksh's ${|foo;}
 }
 
 export interface ParamExp extends BaseNode {
@@ -274,16 +289,16 @@ export interface ParamExp extends BaseNode {
   length: boolean;
   width: boolean;
   param: LitNode | null;
-  index: ArithExpr | null;
+  index: ArithmExpr | null;
   slice: Slice | null;
   repl: Replace | null;
   exp: Expansion | null;
 }
 
-export interface ArithExp extends BaseNode {
-  type: "ArithExp";
+export interface ArithmExp extends BaseNode {
+  type: "ArithmExp";
   unsigned: boolean;
-  x: ArithExpr;
+  x: ArithmExpr;
 }
 
 export interface ProcSubst extends BaseNode {
@@ -295,14 +310,112 @@ export interface ProcSubst extends BaseNode {
 
 export interface ExtGlob extends BaseNode {
   type: "ExtGlob";
-  op: GlobOp;   // "@(" | "*(" | "+(" | "?(" | "!("
-  pattern: Word;
+  op: GlobOp;   // "?(" | "*(" | "+(" | "@(" | "!("
+  pattern: LitNode;    // Note: *Lit in Go, not *Word
 }
 
 export interface BraceExp extends BaseNode {
   type: "BraceExp";
-  sequence: boolean;
+  sequence: boolean;   // {x..y} range form
   elems: Word[];
+}
+```
+
+---
+
+## Arithmetic and Test Expression Types
+
+`ArithmExpr` and `TestExpr` are interface types in Go. They are serialized as
+discriminated unions in TypeScript:
+
+```typescript
+// ArithmExpr: produced by $(( )), (( )), let, array indices, etc.
+export type ArithmExpr =
+  | BinaryArithm
+  | UnaryArithm
+  | ParenArithm
+  | Word;   // a name or literal used as an arithmetic operand
+
+export interface BinaryArithm extends BaseNode {
+  type: "BinaryArithm";
+  op: string;    // e.g. "+", "-", "*", "/", "+=", "==", "?", ":"
+  x: ArithmExpr;
+  y: ArithmExpr;
+}
+
+export interface UnaryArithm extends BaseNode {
+  type: "UnaryArithm";
+  op: string;    // e.g. "!", "~", "++", "--", "+", "-"
+  post: boolean; // true if operator is postfix (x++ vs ++x)
+  x: ArithmExpr;
+}
+
+export interface ParenArithm extends BaseNode {
+  type: "ParenArithm";
+  x: ArithmExpr;
+}
+
+// TestExpr: produced by [[ ]]
+export type TestExpr =
+  | BinaryTest
+  | UnaryTest
+  | ParenTest
+  | Word;   // a literal string operand in a test expression
+
+export interface BinaryTest extends BaseNode {
+  type: "BinaryTest";
+  op: string;    // e.g. "==", "!=", "-eq", "-lt", "=~", "&&", "||"
+  x: TestExpr;
+  y: TestExpr;
+}
+
+export interface UnaryTest extends BaseNode {
+  type: "UnaryTest";
+  op: string;    // e.g. "-f", "-d", "-z", "-n", "!"
+  x: TestExpr;
+}
+
+export interface ParenTest extends BaseNode {
+  type: "ParenTest";
+  x: TestExpr;
+}
+```
+
+---
+
+## Supporting Types
+
+```typescript
+export interface Slice extends BaseNode {
+  type: "Slice";
+  offset: ArithmExpr;
+  length: ArithmExpr | null;
+}
+
+export interface Replace extends BaseNode {
+  type: "Replace";
+  all: boolean;
+  orig: Word;
+  with: Word | null;
+}
+
+export interface Expansion extends BaseNode {
+  type: "Expansion";
+  op: string;    // e.g. ":-", ":=", ":?", ":+", "#", "##", "%", "%%", "^", ","
+  word: Word | null;
+}
+
+export interface ArrayExpr extends BaseNode {
+  type: "ArrayExpr";
+  elems: ArrayElem[];
+  last: Comment[];
+}
+
+export interface ArrayElem extends BaseNode {
+  type: "ArrayElem";
+  index: ArithmExpr | null;
+  value: Word | null;
+  comments: Comment[];
 }
 ```
 
@@ -313,16 +426,25 @@ export interface BraceExp extends BaseNode {
 ```typescript
 export type BinCmdOp = "&&" | "||" | "|" | "|&";
 
+// RedirOperator string values from mvdan/sh's .String() method:
 export type RedirectOp =
-  | ">" | ">>" | "<" | "<<" | "<<<" | "<>"
-  | ">&" | "<&" | ">|" | ">>&" | ">>|&"
-  | "<<-";
+  | ">"    // RdrOut
+  | ">>"   // AppOut
+  | "<"    // RdrIn
+  | "<>"   // RdrInOut
+  | "<&"   // DplIn
+  | ">&"   // DplOut
+  | ">|"   // ClbOut (clobber)
+  | "<<"   // Hdoc
+  | "<<-"  // DashHdoc
+  | "<<<"  // WordHdoc (here-string)
+  | "&>"   // RdrAll (redirect stdout+stderr)
+  | "&>>"; // AppAll (append stdout+stderr)
 
-export type AssignOp = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=";
+export type CaseOp = ";;" | ";&" | ";;&" | ";|";
 
-export type CaseOp = ";;" | ";&" | ";;&";
-
-export type GlobOp = "@(" | "*(" | "+(" | "?(" | "!(";
+// GlobOperator order matches the Go const iota:
+export type GlobOp = "?(" | "*(" | "+(" | "@(" | "!(";
 
 export type ProcOp = "<(" | ">(";
 ```
@@ -341,10 +463,16 @@ export type ShellNode =
   | Comment
   | Command
   | WordPart
-  | ElseClause
+  | ArithmExpr
+  | TestExpr
   | CaseItem
   | WordIter
-  | CStyleLoop;
+  | CStyleLoop
+  | Slice
+  | Replace
+  | Expansion
+  | ArrayExpr
+  | ArrayElem;
 ```
 
 ---
@@ -370,15 +498,17 @@ export function findCalls(ast: ShellFile): CallExprNode[] {
   return calls;
 }
 
+// wordToLit extracts the string value from a single-Lit Word, or returns null
+// if the word contains expansions or multiple parts that can't be statically resolved.
+function wordToLit(w: Word): string | null {
+  if (w.parts.length === 1 && w.parts[0]!.type === "Lit") {
+    return (w.parts[0] as LitNode).value;
+  }
+  return null;
+}
+
 export function resolveFlags(call: CallExprNode): ResolvedCall | null {
   if (call.args.length === 0) return null;
-
-  const wordToLit = (w: Word): string | null => {
-    if (w.parts.length === 1 && w.parts[0]!.type === "Lit") {
-      return (w.parts[0] as LitNode).value;
-    }
-    return null; // expansion — can't statically resolve
-  };
 
   const firstLit = wordToLit(call.args[0]!);
   if (firstLit === null) return null;
@@ -463,7 +593,6 @@ function walkChildren(node: ShellNode, visitor: Visitor): void {
     case "IfClause":
       for (const s of node.cond) walk(s, visitor);
       for (const s of node.then) walk(s, visitor);
-      for (const e of node.elif) walk(e, visitor);
       if (node.else) walk(node.else, visitor);
       break;
     case "WhileClause":
@@ -471,10 +600,28 @@ function walkChildren(node: ShellNode, visitor: Visitor): void {
       for (const s of node.do) walk(s, visitor);
       break;
     case "ForClause":
+      walk(node.loop, visitor);
       for (const s of node.do) walk(s, visitor);
       break;
     case "FuncDecl":
       walk(node.body, visitor);
+      break;
+    case "CaseClause":
+      walk(node.word, visitor);
+      for (const item of node.items) walk(item, visitor);
+      break;
+    case "CaseItem":
+      for (const p of node.patterns) walk(p, visitor);
+      for (const s of node.stmts) walk(s, visitor);
+      break;
+    case "ArithmCmd":
+      walk(node.x, visitor);
+      break;
+    case "TestClause":
+      walk(node.x, visitor);
+      break;
+    case "ProcSubst":
+      for (const stmt of node.stmts) walk(stmt, visitor);
       break;
   }
 }
