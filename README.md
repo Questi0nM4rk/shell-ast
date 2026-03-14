@@ -4,7 +4,7 @@
 complete parse tree as a typed discriminated union.
 
 ```typescript
-import { parse, findCalls, resolveFlags } from "@qs_m4rk/shell-ast";
+import { parse, findCalls, resolveFlags } from "@questi0nm4rk/shell-ast";
 
 const ast = await parse("sudo -u root rm -rf /");
 const [call] = findCalls(ast);
@@ -104,8 +104,8 @@ $(rm -rf /)                 # tokenizer: no subshell traversal
 With `shell-ast`, all of these are handled by walking `CallExpr` nodes:
 
 ```typescript
-import { parse, findCalls } from "@qs_m4rk/shell-ast";
-import { unwrapCall } from "@qs_m4rk/shell-ast/semantic"; // sudo-aware unwrapper
+import { parse, findCalls } from "@questi0nm4rk/shell-ast";
+import { unwrapCall } from "@questi0nm4rk/shell-ast/semantic"; // sudo-aware unwrapper
 
 async function checkCommand(input: string): Promise<string | null> {
   const ast = await parse(input).catch(() => null);
