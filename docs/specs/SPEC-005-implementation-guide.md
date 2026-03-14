@@ -267,14 +267,14 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
 Once `shell-ast` is published to npm, update `ai-guardrails-ts`:
 
 ```bash
-bun add shell-ast
+bun add @qs_m4rk/shell-ast
 ```
 
 Replace `src/hooks/dangerous-patterns.ts`:
 
 ```typescript
-import { parse, findCalls } from "shell-ast";
-import { unwrapCall } from "shell-ast/semantic";
+import { parse, findCalls } from "@qs_m4rk/shell-ast";
+import { unwrapCall } from "@qs_m4rk/shell-ast/semantic";
 
 export async function checkDangerousCommand(input: string): Promise<string | null> {
   let ast;

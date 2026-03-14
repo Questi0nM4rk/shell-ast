@@ -1,5 +1,5 @@
 {
-  "name": "shell-ast",
+  "name": "@qs_m4rk/shell-ast",
   "version": "0.1.0",
   "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
   "license": "MIT",
