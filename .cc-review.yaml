@@ -1,0 +1,39 @@
+version: 1
+mode: standard
+auto_review: true
+
+languages:
+  - typescript
+  - go
+
+ignore_paths:
+  - "dist/**"
+  - "*.wasm"
+  - "node_modules/**"
+  - "bun.lock"
+  - "vendor/**"
+  - "**/*.test.go"
+  - "docs/**"
+  - "**/*.md"
+  - ".github/**"
+
+instructions: |
+  TypeScript/WASM binding for mvdan/sh v3 shell parser that exposes the complete
+  AST as typed discriminated unions. Improves on sh-syntax by serializing the
+  full parse tree (not just source positions), enabling semantic analysis — flag
+  canonicalization, command introspection, redirect walking. Security-adjacent
+  use case.
+
+  Focus on:
+  - parse-tree completeness (all mvdan/sh fields serialized)
+  - TypeScript/Go type alignment (discriminated union coverage for each syntax.* type)
+  - WASM boundary JSON serialization correctness
+  - flag resolution correctness (canonical splitting of combined flags like -rf)
+
+known_patterns:
+  - "wasm_exec.js is copied from Go stdlib and excluded from linting via biome.jsonc override"
+  - "processor/structs.go type-switch serializers are hand-written (not generated) to ensure mvdan/sh fidelity"
+  - "src/types.ts is manually aligned to mvdan/sh/syntax package types"
+
+slop_detection: true
+memory: true
