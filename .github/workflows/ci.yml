@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          # Pinned to match the `go` directive in go.mod. mvdan/sh v3.13+
+          # requires Go 1.25. Bump together when bumping mvdan/sh.
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TS dependencies
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Build WASM
+        run: bun run build:wasm
+
+      - name: Copy Go WASM runtime shim
+        run: cp -f "$(go env GOROOT)/lib/wasm/wasm_exec.js" src/wasm_exec.js
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Go tests
+        run: go test -v -race ./processor/...
+
+      - name: Go fuzz (30s per target, smoke only)
+        run: |
+          # Short, deterministic fuzz: catches regressions where
+          # mvdan/sh adds a node type we don't dispatch, or our
+          # serializer panics on a rare AST shape. Real fuzz runs
+          # would need much longer time budgets; this is a smoke.
+          go test -run=^$ -fuzz=^FuzzSerialize$ -fuzztime=30s ./processor/
+          go test -run=^$ -fuzz=^FuzzSerializeWithSplitBraces$ -fuzztime=30s ./processor/
+
+      - name: Bun tests
+        run: bun test
+
+      - name: Build TS
+        run: bun run build:ts
+
+      - name: Verify dist contents
+        run: |
+          test -f dist/index.js || { echo "missing dist/index.js"; exit 1; }
+          test -f dist/index.d.ts || { echo "missing dist/index.d.ts"; exit 1; }
+          test -f dist/semantic.js || { echo "missing dist/semantic.js"; exit 1; }
+          test -f dist/semantic.d.ts || { echo "missing dist/semantic.d.ts"; exit 1; }
+          test -f dist/shell-ast.wasm || { echo "missing dist/shell-ast.wasm"; exit 1; }
+          test -f dist/wasm_exec.js || { echo "missing dist/wasm_exec.js"; exit 1; }
+          ls -la dist/
+
+      - name: Compile-binary smoke test (BUG-001 regression)
+        run: tests/smoke/run-compile-smoke.sh
+
+      - name: No-execution guard (test surface must never shell out)
+        run: |
+          # Test files parse shell strings; they must never execute them.
+          # Block any import of a process-execution API across src/ and
+          # tests/. Patterns cover Node, Bun, and Deno surfaces.
+          PATTERN='child_process|node:child_process|worker_threads|node:worker_threads|node:vm|execSync|spawnSync|Bun\.spawn|Deno\.(run|Command)|require\(["'"'"'`]child_process|import\(["'"'"'`]child_process'
+          if grep -rEn "$PATTERN" tests/ src/; then
+            echo "::error::execution API found in source/test code — see tests/_assertions.ts safety contract"
+            exit 1
+          fi
+          echo "OK — no execution APIs imported"

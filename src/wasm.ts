@@ -1,52 +1,67 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+// WASM bridge to the Go shell-ast processor.
+//
+// Asset loading uses Bun import attributes so paths are not resolved at
+// runtime via import.meta.dirname (which `bun build --compile` would
+// snapshot to the build-machine's absolute path — see docs/BUGS.md
+// BUG-001 and docs/AUDIT.md A1).
+//
+// `with { type: "file" }` returns a real path in dev and a $bunfs/...
+// embedded path in compiled binaries; readFile works in both.
+//
+// The shim is a side-effect import — wasm_exec.js is an IIFE that
+// registers `globalThis.Go` when evaluated. Bun bundles it inline in
+// dev and in compiled binaries.
+//
+// loadWasm() caches its in-flight promise so concurrent first-callers
+// share a single instantiation (audit A3).
 
-// WebAssembly.Imports is not directly accessible in all TypeScript targets;
-// use Parameters inference to get the exact type expected by instantiate.
+import { readFile } from "node:fs/promises";
+import "./wasm_exec.js";
+import wasmPath from "../dist/shell-ast.wasm" with { type: "file" };
+
+// WebAssembly.Imports isn't exported in all lib targets; derive the
+// expected type from instantiate's signature.
 type WasmImports = NonNullable<Parameters<typeof WebAssembly.instantiate>[1]>;
+
+interface GoConstructor {
+  new (): GoInstance;
+}
 
 interface GoInstance {
   importObject: WasmImports;
   run(instance: WebAssembly.Instance): void;
 }
 
-let parseFn: ((src: string, dialect?: string) => string) | null = null;
+type ParseFn = (src: string, dialect?: string, splitBraces?: boolean) => string;
 
-async function loadGoRuntime(): Promise<new () => GoInstance> {
-  // Check if the Go WASM runtime is already loaded
-  const g = globalThis as Record<string, unknown>;
-  // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature forbids .Go on Record<>
-  if (g["Go"]) return g["Go"] as new () => GoInstance;
+let parseFn: ParseFn | null = null;
+let loadPromise: Promise<void> | null = null;
 
-  // Load and execute wasm_exec.js which sets globalThis.Go.
-  // new Function() runs the code in global scope, which is exactly what we need.
-  const runtimePath = join(import.meta.dirname, "wasm_exec.js");
-  const src = await readFile(runtimePath, "utf8");
-  new Function(src)();
-
-  // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature forbids .Go on Record<>
-  return g["Go"] as new () => GoInstance;
+function readGlobal<T>(key: string): T | undefined {
+  return (globalThis as Record<string, unknown>)[key] as T | undefined;
 }
 
-export async function loadWasm(): Promise<void> {
-  if (parseFn !== null) return;
+async function doLoadWasm(): Promise<void> {
+  const Go = readGlobal<GoConstructor>("Go");
+  if (!Go) throw new Error("shell-ast: wasm_exec.js did not register globalThis.Go");
 
-  const Go = await loadGoRuntime();
-  const wasmPath = join(import.meta.dirname, "../dist/shell-ast.wasm");
   const wasmBytes = await readFile(wasmPath);
-
   const go = new Go();
   const result = await WebAssembly.instantiate(wasmBytes, go.importObject);
   go.run(result.instance);
 
-  parseFn = (src: string, dialect = "bash") => {
-    const g2 = globalThis as Record<string, unknown>;
-    // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature forbids .__shellAstParse
-    return (g2["__shellAstParse"] as (s: string, d: string) => string)(src, dialect);
-  };
+  const exported = readGlobal<ParseFn>("__shellAstParse");
+  if (!exported) throw new Error("shell-ast: WASM did not register __shellAstParse");
+  parseFn = exported;
 }
 
-export function parseRaw(src: string, dialect?: string): string {
-  if (parseFn === null) throw new Error("WASM not loaded — call loadWasm() first");
-  return parseFn(src, dialect);
+export function loadWasm(): Promise<void> {
+  loadPromise ??= doLoadWasm();
+  return loadPromise;
+}
+
+export function parseRaw(src: string, dialect?: string, splitBraces?: boolean): string {
+  if (parseFn === null)
+    throw new Error("shell-ast: WASM not loaded — call loadWasm() first");
+  return parseFn(src, dialect, splitBraces);
 }

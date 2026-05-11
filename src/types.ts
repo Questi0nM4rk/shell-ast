@@ -261,11 +261,16 @@ export interface ParamExp extends BaseNode {
   slice: Slice | null;
   repl: Replace | null;
   exp: Expansion | null;
+  // mvdan/sh ParNamesOperator. "@" for ${!prefix@}, "*" for ${!prefix*},
+  // "" for any other parameter expansion (most cases).
+  names: "" | "@" | "*";
 }
 
 export interface ArithmExp extends BaseNode {
   type: "ArithmExp";
   unsigned: boolean;
+  // true for $[expr] (deprecated bracket form); false for $((expr)).
+  bracket: boolean;
   x: ArithmExpr;
 }
 

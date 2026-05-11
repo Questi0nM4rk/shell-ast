@@ -1,33 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { unwrapCall } from "../src/semantic.js";
-import type { CallExprNode, LitNode, NodePos, Word } from "../src/types.js";
-
-function makePos(offset = 0, line = 1, col = 1): NodePos {
-  return { offset, line, col };
-}
-
-function makeLit(value: string): LitNode {
-  return { type: "Lit", value, pos: makePos(), end: makePos() };
-}
-
-function makeWord(...lits: string[]): Word {
-  return {
-    type: "Word",
-    parts: lits.map(makeLit),
-    pos: makePos(),
-    end: makePos(),
-  };
-}
-
-function makeCall(...args: string[]): CallExprNode {
-  return {
-    type: "CallExpr",
-    assigns: [],
-    args: args.map((a) => makeWord(a)),
-    pos: makePos(),
-    end: makePos(),
-  };
-}
+import type { CallExprNode } from "../src/types.js";
+import { makeCall, makePos } from "./_factories.js";
 
 describe("unwrapCall", () => {
   test("non-escalator command returns wrapper: null", () => {
