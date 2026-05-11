@@ -74,6 +74,9 @@ jobs:
       - name: Compile-binary smoke test (BUG-001 regression)
         run: tests/smoke/run-compile-smoke.sh
 
+      - name: Consumer-install smoke test (gh #5 regression)
+        run: tests/smoke/run-consumer-install-smoke.sh
+
       - name: No-execution guard (test surface must never shell out)
         run: |
           # Test files parse shell strings; they must never execute them.
