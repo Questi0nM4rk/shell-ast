@@ -1,8 +1,15 @@
 import type { ShellFile } from "./types.js";
 import { loadWasm, parseRaw } from "./wasm.js";
 
-export type { ResolvedArg, ResolvedCall } from "./helpers.js";
-export { DYNAMIC, findCalls, resolveFlags, wordToLit } from "./helpers.js";
+export {
+  findAssignments,
+  findCalls,
+  findCmdSubstitutions,
+  findFunctions,
+  findRedirects,
+} from "./extract.js";
+export type { ResolvedArg, ResolvedCall } from "./flags.js";
+export { DYNAMIC, resolveFlags, wordToLit } from "./flags.js";
 export type { UnwrappedCall } from "./semantic.js";
 export { unwrapCall } from "./semantic.js";
 export type {

@@ -6,151 +6,43 @@
 // silently misses a real-world bypass.
 
 import { describe, expect, test } from "bun:test";
-import { DYNAMIC, findCalls, parse, resolveFlags } from "../src/index.js";
-import { unwrapCall } from "../src/semantic.js";
+import { DYNAMIC, parse } from "../src/index.js";
+import { testCmd } from "./_assertions.js";
 
 describe("quoted flags must canonicalize the same as bare flags", () => {
   // Bash strips quotes before passing args to the command. A hook that
   // checks for `flags.includes("-r")` must see `-r` whether the user
   // wrote rm -rf, rm "-rf", or rm '-rf'. Otherwise: silent bypass.
-
-  test('rm "-rf" / — double-quoted combined flag', async () => {
-    const ast = await parse('rm "-rf" /');
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.cmd).toBe("rm");
-    expect(resolved?.flags).toContain("-r");
-    expect(resolved?.flags).toContain("-f");
-    expect(resolved?.args).toEqual(["/"]);
-  });
-
-  test("rm '-rf' / — single-quoted combined flag", async () => {
-    const ast = await parse("rm '-rf' /");
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.cmd).toBe("rm");
-    expect(resolved?.flags).toContain("-r");
-    expect(resolved?.flags).toContain("-f");
-    expect(resolved?.args).toEqual(["/"]);
-  });
-
-  test('rm "-r" "-f" / — both flags double-quoted separately', async () => {
-    const ast = await parse('rm "-r" "-f" /');
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.cmd).toBe("rm");
-    expect(resolved?.flags).toEqual(["-r", "-f"]);
-    expect(resolved?.args).toEqual(["/"]);
-  });
-
-  test('"rm" -rf / — quoted command name resolves too', async () => {
-    const ast = await parse('"rm" -rf /');
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.cmd).toBe("rm");
-    expect(resolved?.flags).toContain("-r");
-  });
-
-  test("dynamic Word becomes typed DYNAMIC sentinel (not magic string)", async () => {
-    const ast = await parse('rm "$flags" /');
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.cmd).toBe("rm");
-    // "$flags" is DblQuoted with ParamExp inside — cannot resolve statically.
-    expect(resolved?.flags).toEqual([]);
-    expect(resolved?.args).toContain(DYNAMIC);
-    // The literal "/" is preserved as a string.
-    expect(resolved?.args).toContain("/");
-  });
-
-  test("literal '<dynamic>' string is NOT confused with DYNAMIC sentinel", async () => {
-    // Pre-fix this would parse to args: ["<dynamic>"] and collide with
-    // a real substitution. With Symbol sentinel the two are distinct.
-    const ast = await parse(`rm "<dynamic>"`);
-    const resolved = resolveFlags(findCalls(ast)[0]!);
-    expect(resolved?.args).toEqual(["<dynamic>"]);
-    expect(resolved?.args).not.toContain(DYNAMIC);
-  });
+  testCmd('rm "-rf" /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
+  testCmd("rm '-rf' /", { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
+  testCmd('rm "-r" "-f" /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
+  testCmd('"rm" -rf /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
+  // "$flags" is DblQuoted with ParamExp inside — cannot resolve statically;
+  // the literal "/" is preserved as a string.
+  testCmd('rm "$flags" /', { cmd: "rm", flags: [], args: [DYNAMIC, "/"] });
+  // Pre-fix the literal user string "<dynamic>" would collide with the
+  // sentinel; with Symbol it stays a real string in args.
+  testCmd('rm "<dynamic>"', { cmd: "rm", args: ["<dynamic>"] });
 });
 
 describe("findCalls reaches commands inside every nesting form", () => {
   // walk.ts has a switch case for each container type. A regression
   // dropping any case silently breaks findCalls for that nesting form.
+  testCmd("make && rm -rf / || echo done", { calls: ["make", "rm", "echo"] });
+  testCmd("cat /etc/passwd | grep root | wc -l", { calls: ["cat", "grep", "wc"] });
+  testCmd("(cd /tmp && rm -rf *)", { calls: ["cd", "rm"] });
+  testCmd("{ echo a; rm -rf /; }", { calls: ["echo", "rm"] });
+  testCmd("if true; then rm -rf /; fi", { calls: ["true", "rm"] });
+  testCmd("if false; then echo; else rm -rf /; fi", { calls: ["false", "echo", "rm"] });
+  testCmd("while :; do rm -rf /; done", { calls: [":", "rm"] });
+  testCmd("for f in *.txt; do rm $f; done", { calls: ["rm"] });
+  testCmd("case x in y) rm -rf /;; *) echo no;; esac", { calls: ["rm", "echo"] });
+  testCmd("foo() { rm -rf /; }", { calls: ["rm"] });
+  testCmd("echo $(rm -rf /)", { calls: ["echo", "rm"] });
+  testCmd("! rm -rf /", { calls: ["rm"] });
+  testCmd("rm -rf / &", { calls: ["rm"] });
 
-  async function callNames(src: string): Promise<string[]> {
-    const ast = await parse(src);
-    return findCalls(ast).map((c) => {
-      const part = c.args[0]?.parts[0];
-      return part?.type === "Lit" ? part.value : "<unresolvable>";
-    });
-  }
-
-  test("BinaryCmd: && and || chain", async () => {
-    const names = await callNames("make && rm -rf / || echo done");
-    expect(names).toEqual(["make", "rm", "echo"]);
-  });
-
-  test("Pipe (BinaryCmd op |)", async () => {
-    expect(await callNames("cat /etc/passwd | grep root | wc -l")).toEqual([
-      "cat",
-      "grep",
-      "wc",
-    ]);
-  });
-
-  test("Subshell", async () => {
-    expect(await callNames("(cd /tmp && rm -rf *)")).toEqual(["cd", "rm"]);
-  });
-
-  test("Block", async () => {
-    expect(await callNames("{ echo a; rm -rf /; }")).toEqual(["echo", "rm"]);
-  });
-
-  test("IfClause then-branch", async () => {
-    expect(await callNames("if true; then rm -rf /; fi")).toEqual(["true", "rm"]);
-  });
-
-  test("IfClause else-branch", async () => {
-    expect(await callNames("if false; then echo; else rm -rf /; fi")).toEqual([
-      "false",
-      "echo",
-      "rm",
-    ]);
-  });
-
-  test("WhileClause body", async () => {
-    expect(await callNames("while :; do rm -rf /; done")).toEqual([":", "rm"]);
-  });
-
-  test("ForClause body", async () => {
-    expect(await callNames("for f in *.txt; do rm $f; done")).toEqual(["rm"]);
-  });
-
-  test("CaseClause arm", async () => {
-    expect(await callNames("case x in y) rm -rf /;; *) echo no;; esac")).toEqual([
-      "rm",
-      "echo",
-    ]);
-  });
-
-  test("FuncDecl body", async () => {
-    expect(await callNames("foo() { rm -rf /; }")).toEqual(["rm"]);
-  });
-
-  test("Nested CmdSubst with dangerous payload", async () => {
-    expect(await callNames("echo $(rm -rf /)")).toEqual(["echo", "rm"]);
-  });
-
-  test("Negated statement still surfaces inner call", async () => {
-    expect(await callNames("! rm -rf /")).toEqual(["rm"]);
-  });
-
-  test("Background statement still surfaces inner call", async () => {
-    expect(await callNames("rm -rf / &")).toEqual(["rm"]);
-  });
-
-  test("Assignment-prefix CallExpr surfaces", async () => {
-    const ast = await parse("FOO=bar rm -rf /");
-    const calls = findCalls(ast);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.assigns).toHaveLength(1);
-    expect(resolveFlags(calls[0]!)?.cmd).toBe("rm");
-  });
+  testCmd("FOO=bar rm -rf /", { cmd: "rm", calls: ["rm"], assignsCount: 1 });
 });
 
 describe("dialect parameter actually changes parser behavior", () => {
@@ -250,70 +142,20 @@ describe("input size cap (audit B2)", () => {
 });
 
 describe("privilege escalators (audit B1, B4)", () => {
-  test("sudo -u root rm -rf / unwraps to rm", async () => {
-    const ast = await parse("sudo -u root rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("sudo");
-    expect(u?.cmd).toBe("rm");
+  testCmd("sudo -u root rm -rf /", { wrapper: "sudo", cmd: "rm" });
+  testCmd("doas -u root rm -rf /", { wrapper: "doas", cmd: "rm" });
+  testCmd("pkexec --user root rm -rf /", { wrapper: "pkexec", cmd: "rm" });
+  testCmd("gosu nobody rm -rf /tmp", { wrapper: "gosu", cmd: "rm" });
+  testCmd("runuser -u root rm -rf /", { wrapper: "runuser", cmd: "rm" });
+  testCmd("setpriv --reuid 0 rm -rf /", { wrapper: "setpriv", cmd: "rm" });
+  testCmd("sudo --user=root rm -rf /", { wrapper: "sudo", cmd: "rm" });
+  // su -c / sh -c put the inner command INSIDE -c's value as a string.
+  // unwrapCall returns commandString instead of cmd so the consumer
+  // can parse() it themselves.
+  testCmd(`su user -c "rm -rf /"`, {
+    wrapper: "su",
+    cmd: null,
+    commandString: "rm -rf /",
   });
-
-  test("doas -u root rm unwraps", async () => {
-    const ast = await parse("doas -u root rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("doas");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test("pkexec --user root rm unwraps", async () => {
-    const ast = await parse("pkexec --user root rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("pkexec");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test("gosu user rm unwraps (no flags-with-args)", async () => {
-    const ast = await parse("gosu nobody rm -rf /tmp");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("gosu");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test("runuser -u root rm unwraps", async () => {
-    const ast = await parse("runuser -u root rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("runuser");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test("setpriv --reuid root rm unwraps", async () => {
-    const ast = await parse("setpriv --reuid 0 rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("setpriv");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test("sudo --user=root rm unwraps (long-eq form)", async () => {
-    const ast = await parse("sudo --user=root rm -rf /");
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("sudo");
-    expect(u?.cmd).toBe("rm");
-  });
-
-  test('su user -c "rm -rf /" exposes commandString', async () => {
-    // su's contract is unique: the inner command is INSIDE -c's value
-    // as a string. unwrapCall returns commandString instead of cmd so
-    // the consumer can parse it themselves.
-    const ast = await parse(`su user -c "rm -rf /"`);
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("su");
-    expect(u?.cmd).toBeNull();
-    expect(u?.commandString).toBe("rm -rf /");
-  });
-
-  test('sh -c "rm -rf /" exposes commandString', async () => {
-    const ast = await parse(`sh -c "rm -rf /"`);
-    const u = unwrapCall(findCalls(ast)[0]!);
-    expect(u?.wrapper).toBe("sh");
-    expect(u?.commandString).toBe("rm -rf /");
-  });
+  testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", cmd: null, commandString: "rm -rf /" });
 });

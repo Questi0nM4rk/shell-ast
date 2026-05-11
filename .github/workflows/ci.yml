@@ -64,3 +64,15 @@ jobs:
 
       - name: Compile-binary smoke test (BUG-001 regression)
         run: tests/smoke/run-compile-smoke.sh
+
+      - name: No-execution guard (test surface must never shell out)
+        run: |
+          # Test files parse shell strings; they must never execute them.
+          # Block any import of a process-execution API across src/ and
+          # tests/. Patterns cover Node, Bun, and Deno surfaces.
+          PATTERN='child_process|node:child_process|worker_threads|node:worker_threads|node:vm|execSync|spawnSync|Bun\.spawn|Deno\.(run|Command)|require\(["'"'"'`]child_process|import\(["'"'"'`]child_process'
+          if grep -rEn "$PATTERN" tests/ src/; then
+            echo "::error::execution API found in source/test code — see tests/_assertions.ts safety contract"
+            exit 1
+          fi
+          echo "OK — no execution APIs imported"

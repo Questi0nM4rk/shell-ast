@@ -1,10 +1,8 @@
-import type { ResolvedArg } from "./helpers.js";
-import { resolveFlags, wordToLit } from "./helpers.js";
+import type { ResolvedArg } from "./flags.js";
+import { resolveFlags, wordToLit } from "./flags.js";
 import type { CallExprNode } from "./types.js";
 
-export type { ResolvedCall } from "./helpers.js";
-// wordToLit is re-exported from helpers for convenience
-export { wordToLit } from "./helpers.js";
+export type { ResolvedCall } from "./flags.js";
 
 interface WrapperSchema {
   /** Flags that consume the next positional arg as their value. */

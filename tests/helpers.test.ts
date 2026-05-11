@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DYNAMIC, findCalls, resolveFlags, wordToLit } from "../src/helpers.js";
+import { DYNAMIC, findCalls, resolveFlags, wordToLit } from "../src/index.js";
 import type { CallExprNode, ShellFile, Word } from "../src/types.js";
 import { walk } from "../src/walk.js";
 import {

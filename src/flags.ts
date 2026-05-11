@@ -1,5 +1,4 @@
-import type { CallExprNode, ShellFile, Word } from "./types.js";
-import { walk } from "./walk.js";
+import type { CallExprNode, Word } from "./types.js";
 
 /** Sentinel for positional args whose value cannot be statically
  *  resolved (variables, command substitutions). Distinct from any
@@ -14,16 +13,6 @@ export interface ResolvedCall {
   flags: string[]; // all "-x" and "--foo" arguments, split from combined short flags
   args: ResolvedArg[]; // non-flag positional arguments; DYNAMIC for unresolvable
   raw: CallExprNode; // original AST node
-}
-
-export function findCalls(ast: ShellFile): CallExprNode[] {
-  const calls: CallExprNode[] = [];
-  walk(ast, {
-    CallExpr(node) {
-      calls.push(node);
-    },
-  });
-  return calls;
 }
 
 // wordToLit extracts the effective string value of a Word as it would
