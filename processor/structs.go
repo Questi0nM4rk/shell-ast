@@ -575,6 +575,13 @@ func serializeCmdSubst(n *syntax.CmdSubst) map[string]interface{} {
 }
 
 func serializeParamExp(n *syntax.ParamExp) map[string]interface{} {
+	// n.Names.String() returns "illegalTok" for the zero value (no names
+	// operator), which is mvdan/sh's enum-default token. Normalize to ""
+	// so the JSON schema and the TS union are clean.
+	names := ""
+	if n.Names != 0 {
+		names = n.Names.String()
+	}
 	return map[string]interface{}{
 		"type":   "ParamExp",
 		"short":  n.Short,
@@ -585,7 +592,7 @@ func serializeParamExp(n *syntax.ParamExp) map[string]interface{} {
 		"index":  serializeArithmExpr(n.Index),
 		"slice":  serializeSlice(n.Slice),
 		"repl":   serializeReplace(n.Repl),
-		"names":  n.Names.String(),
+		"names":  names,
 		"exp":    serializeExpansion(n.Exp),
 		"pos":    nodePos(n.Pos()),
 		"end":    nodePos(n.End()),

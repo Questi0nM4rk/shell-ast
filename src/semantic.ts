@@ -43,12 +43,20 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
 
   if (i >= rawArgs.length) return null;
 
-  // Build a synthetic CallExpr from position i onward
+  // Build a synthetic CallExpr from position i onward. Use inner-arg
+  // positions rather than spreading the wrapper's pos/end — if this
+  // node ever escapes resolveFlags or a future caller reads its
+  // positions, the values must reflect the unwrapped command.
   const innerArgs = rawArgs.slice(i);
+  const firstInner = innerArgs[0];
+  const lastInner = innerArgs[innerArgs.length - 1];
+  if (!firstInner || !lastInner) return null; // unreachable: line 44 guards
   const syntheticCall: CallExprNode = {
-    ...call,
+    type: "CallExpr",
     assigns: [],
     args: innerArgs,
+    pos: firstInner.pos,
+    end: lastInner.end,
   };
   const innerResolved = resolveFlags(syntheticCall);
   if (!innerResolved) return null;
