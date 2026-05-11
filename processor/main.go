@@ -25,6 +25,10 @@ func parseShell(this js.Value, args []js.Value) interface{} {
 	if len(args) >= 2 {
 		dialect = args[1].String()
 	}
+	splitBraces := false
+	if len(args) >= 3 && args[2].Type() == js.TypeBoolean {
+		splitBraces = args[2].Bool()
+	}
 
 	lang, err := parseDialect(dialect)
 	if err != nil {
@@ -37,6 +41,10 @@ func parseShell(this js.Value, args []js.Value) interface{} {
 		return syntaxErrorResult(err.Error())
 	}
 
+	if splitBraces {
+		applySplitBraces(f)
+	}
+
 	node := serializeFile(f)
 	b, err := json.Marshal(node)
 	if err != nil {
@@ -44,6 +52,7 @@ func parseShell(this js.Value, args []js.Value) interface{} {
 	}
 	return js.ValueOf(string(b))
 }
+
 
 func parseDialect(s string) (syntax.LangVariant, error) {
 	switch s {

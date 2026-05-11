@@ -1,68 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { findCalls, resolveFlags, wordToLit } from "../src/helpers.js";
-import type {
-  CallExprNode,
-  LitNode,
-  NodePos,
-  ShellFile,
-  Stmt,
-  Word,
-} from "../src/types.js";
+import { DYNAMIC, findCalls, resolveFlags, wordToLit } from "../src/index.js";
+import type { CallExprNode, ShellFile, Word } from "../src/types.js";
 import { walk } from "../src/walk.js";
-
-// ─── Test Fixtures ────────────────────────────────────────────────────────────
-
-function makePos(offset = 0, line = 1, col = 1): NodePos {
-  return { offset, line, col };
-}
-
-function makeLit(value: string): LitNode {
-  return { type: "Lit", value, pos: makePos(), end: makePos() };
-}
-
-function makeWord(...lits: string[]): Word {
-  return {
-    type: "Word",
-    parts: lits.map(makeLit),
-    pos: makePos(),
-    end: makePos(),
-  };
-}
-
-function makeCall(...args: string[]): CallExprNode {
-  return {
-    type: "CallExpr",
-    assigns: [],
-    args: args.map((a) => makeWord(a)),
-    pos: makePos(),
-    end: makePos(),
-  };
-}
-
-function makeStmt(cmd: CallExprNode): Stmt {
-  return {
-    type: "Stmt",
-    cmd,
-    redirs: [],
-    comments: [],
-    negated: false,
-    background: false,
-    coprocess: false,
-    pos: makePos(),
-    end: makePos(),
-  };
-}
-
-function makeFile(...calls: CallExprNode[]): ShellFile {
-  return {
-    type: "File",
-    name: "",
-    stmts: calls.map(makeStmt),
-    last: [],
-    pos: makePos(),
-    end: makePos(),
-  };
-}
+import {
+  makeCall,
+  makeFile,
+  makeLit,
+  makePos,
+  makeStmt,
+  makeWord,
+} from "./_factories.js";
 
 // ─── wordToLit tests ──────────────────────────────────────────────────────────
 
@@ -97,6 +44,7 @@ describe("wordToLit", () => {
           slice: null,
           repl: null,
           exp: null,
+          names: "",
           pos: makePos(),
           end: makePos(),
         },
@@ -171,6 +119,7 @@ describe("resolveFlags", () => {
           slice: null,
           repl: null,
           exp: null,
+          names: "",
           pos: makePos(),
           end: makePos(),
         },
@@ -188,7 +137,7 @@ describe("resolveFlags", () => {
     expect(resolveFlags(call)).toBeNull();
   });
 
-  test("marks dynamic arguments as <dynamic>", () => {
+  test("marks dynamic arguments with the DYNAMIC sentinel", () => {
     const call: CallExprNode = {
       type: "CallExpr",
       assigns: [],
@@ -216,7 +165,7 @@ describe("resolveFlags", () => {
       end: makePos(),
     };
     const result = resolveFlags(call);
-    expect(result!.args).toEqual(["<dynamic>"]);
+    expect(result!.args).toEqual([DYNAMIC]);
   });
 });
 

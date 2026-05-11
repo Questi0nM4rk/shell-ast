@@ -30,10 +30,16 @@ with exhaustive-switch support.
 
 ---
 
-## Status
+## Install
 
-> **Pre-release.** Not yet published to npm. Implementation in progress —
-> see [`docs/specs/`](docs/specs/) for design and milestones.
+```bash
+bun add @questi0nm4rk/shell-ast
+# or
+npm install @questi0nm4rk/shell-ast
+```
+
+The package ships pre-built WASM in `dist/`; no Go toolchain needed at
+install time. See [`docs/specs/`](docs/specs/) for the design history.
 
 ---
 

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.7/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
   "linter": {
     "enabled": true,
     "rules": {
@@ -36,6 +36,16 @@
       "includes": ["src/wasm_exec.js"],
       "linter": { "enabled": false },
       "formatter": { "enabled": false }
+    },
+    {
+      // Smoke entry-point scripts use console.log/error as their result channel —
+      // they're CLI binaries, not library code.
+      "includes": ["tests/smoke/**/*.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
     }
   ]
 }

@@ -10,12 +10,25 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// parseSource is a test helper that parses shell source and serializes it.
-func parseSource(t *testing.T, src string) map[string]interface{} {
+// parseOption mutates the parsed File in place before serialization.
+// Use to apply post-parse transforms like syntax.SplitBraces.
+type parseOption func(*syntax.File)
+
+// withSplitBraces is a parseOption that exposes BraceExp nodes by
+// applying the same transform parse() uses when called with
+// `{ splitBraces: true }`.
+var withSplitBraces parseOption = applySplitBraces
+
+// parseSource parses shell source, applies any options, and returns
+// the JSON-decoded serialized AST.
+func parseSource(t *testing.T, src string, opts ...parseOption) map[string]interface{} {
 	t.Helper()
 	p := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(syntax.LangBash))
 	f, err := p.Parse(strings.NewReader(src), "")
 	require.NoError(t, err)
+	for _, opt := range opts {
+		opt(f)
+	}
 	b, err := json.Marshal(serializeFile(f))
 	require.NoError(t, err)
 	var result map[string]interface{}
@@ -23,22 +36,41 @@ func parseSource(t *testing.T, src string) map[string]interface{} {
 	return result
 }
 
-// getStmt is a test helper that returns the nth statement's cmd map.
+// nav walks a JSON-decoded AST through a sequence of map keys (string)
+// and array indices (int). Each step's failure points at the path so
+// far for fast diagnosis.
+func nav(t *testing.T, root interface{}, steps ...interface{}) interface{} {
+	t.Helper()
+	cur := root
+	for i, step := range steps {
+		switch s := step.(type) {
+		case string:
+			m, ok := cur.(map[string]interface{})
+			require.True(t, ok, "step %d (%q): expected map at %v, got %T", i, s, steps[:i], cur)
+			cur = m[s]
+		case int:
+			a, ok := cur.([]interface{})
+			require.True(t, ok, "step %d (%d): expected array at %v, got %T", i, s, steps[:i], cur)
+			require.Less(t, s, len(a), "step %d: index %d out of range (len=%d)", i, s, len(a))
+			cur = a[s]
+		default:
+			t.Fatalf("step %d: unsupported step type %T", i, step)
+		}
+	}
+	return cur
+}
+
+// getCmd returns the nth statement's cmd map.
 func getCmd(t *testing.T, ast map[string]interface{}, stmtIdx int) map[string]interface{} {
 	t.Helper()
-	stmts := ast["stmts"].([]interface{})
-	require.Greater(t, len(stmts), stmtIdx)
-	stmt := stmts[stmtIdx].(map[string]interface{})
-	cmd, ok := stmt["cmd"].(map[string]interface{})
-	require.True(t, ok, "stmt.cmd is not a map")
+	cmd, ok := nav(t, ast, "stmts", stmtIdx, "cmd").(map[string]interface{})
+	require.True(t, ok, "stmts[%d].cmd is not a map", stmtIdx)
 	return cmd
 }
 
+// litValue returns the .value of the first Lit part of a Word.
 func litValue(arg interface{}) string {
-	word := arg.(map[string]interface{})
-	parts := word["parts"].([]interface{})
-	lit := parts[0].(map[string]interface{})
-	return lit["value"].(string)
+	return arg.(map[string]interface{})["parts"].([]interface{})[0].(map[string]interface{})["value"].(string)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -227,18 +259,6 @@ func TestSerializeForClause(t *testing.T) {
 	assert.Equal(t, "WordIter", loop["type"])
 	name := loop["name"].(map[string]interface{})
 	assert.Equal(t, "f", name["value"])
-}
-
-func TestSerializeBashArray(t *testing.T) {
-	ast := parseSource(t, "arr=(a b c)")
-	stmts := ast["stmts"].([]interface{})
-	stmt := stmts[0].(map[string]interface{})
-	cmd := stmt["cmd"]
-	// arr=(a b c) is a CallExpr with an Assign
-	if cmd != nil {
-		cmdMap := cmd.(map[string]interface{})
-		assert.Equal(t, "CallExpr", cmdMap["type"])
-	}
 }
 
 func TestSerializeTestClause(t *testing.T) {

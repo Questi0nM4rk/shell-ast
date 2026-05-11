@@ -1,6 +1,6 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
   "license": "MIT",
   "repository": {
@@ -24,10 +24,10 @@
     "dist/"
   ],
   "scripts": {
-    "build:wasm": "mkdir -p dist && GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor",
-    "build:ts": "bun build src/index.ts src/semantic.ts --outdir dist --target node && tsc --declaration --emitDeclarationOnly --outDir dist && cp src/wasm_exec.js dist/wasm_exec.js",
+    "build:wasm": "rm -rf dist && mkdir -p dist && GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor && cp \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" src/wasm_exec.js",
+    "build:ts": "bun build src/index.ts src/semantic.ts --outdir dist --target node --asset-naming='[name].[ext]' && tsc --declaration --emitDeclarationOnly --outDir dist && cp src/wasm_exec.js dist/wasm_exec.js",
     "build": "bun run build:wasm && bun run build:ts",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run lint && bun run typecheck && go test ./processor/... && bun test && bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ tests/"

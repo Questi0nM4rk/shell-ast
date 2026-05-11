@@ -23,7 +23,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# Bun lockfiles (bun.lockb = Bun 1.x binary, bun.lock = Bun 2.x text)
-# Consider committing these for reproducible installs.
+# Legacy binary lockfile (Bun 1.x). The text bun.lock is committed
+# for reproducible installs.
 bun.lockb
-bun.lock
