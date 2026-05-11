@@ -25,6 +25,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+          # Cache ~/.bun/install/cache between runs (keyed on bun.lockb if present).
+          cache: true
 
       - name: Install TS dependencies
         run: bun install --frozen-lockfile || bun install
@@ -59,3 +61,6 @@ jobs:
           test -f dist/shell-ast.wasm || { echo "missing dist/shell-ast.wasm"; exit 1; }
           test -f dist/wasm_exec.js || { echo "missing dist/wasm_exec.js"; exit 1; }
           ls -la dist/
+
+      - name: Compile-binary smoke test (BUG-001 regression)
+        run: tests/smoke/run-compile-smoke.sh
