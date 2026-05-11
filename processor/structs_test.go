@@ -14,20 +14,10 @@ import (
 // Use to apply post-parse transforms like syntax.SplitBraces.
 type parseOption func(*syntax.File)
 
-// withSplitBraces walks the tree and applies SplitBraces to every Word.
-// The default parser leaves "{a,b,c}" as a Lit; this option turns it
-// into BraceExp nodes.
-func withSplitBraces(f *syntax.File) {
-	syntax.Walk(f, func(node syntax.Node) bool {
-		if w, ok := node.(*syntax.Word); ok {
-			syntax.SplitBraces(w)
-			// Don't descend — Walk's switch panics on BraceExp,
-			// the very node SplitBraces produces.
-			return false
-		}
-		return true
-	})
-}
+// withSplitBraces is a parseOption that exposes BraceExp nodes by
+// applying the same transform parse() uses when called with
+// `{ splitBraces: true }`.
+var withSplitBraces parseOption = applySplitBraces
 
 // parseSource parses shell source, applies any options, and returns
 // the JSON-decoded serialized AST.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findCalls, resolveFlags, wordToLit } from "../src/helpers.js";
+import { DYNAMIC, findCalls, resolveFlags, wordToLit } from "../src/helpers.js";
 import type { CallExprNode, ShellFile, Word } from "../src/types.js";
 import { walk } from "../src/walk.js";
 import {
@@ -137,7 +137,7 @@ describe("resolveFlags", () => {
     expect(resolveFlags(call)).toBeNull();
   });
 
-  test("marks dynamic arguments as <dynamic>", () => {
+  test("marks dynamic arguments with the DYNAMIC sentinel", () => {
     const call: CallExprNode = {
       type: "CallExpr",
       assigns: [],
@@ -165,7 +165,7 @@ describe("resolveFlags", () => {
       end: makePos(),
     };
     const result = resolveFlags(call);
-    expect(result!.args).toEqual(["<dynamic>"]);
+    expect(result!.args).toEqual([DYNAMIC]);
   });
 });
 

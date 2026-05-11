@@ -1,10 +1,18 @@
-import type { CallExprNode, LitNode, ShellFile, Word } from "./types.js";
+import type { CallExprNode, ShellFile, Word } from "./types.js";
 import { walk } from "./walk.js";
+
+/** Sentinel for positional args whose value cannot be statically
+ *  resolved (variables, command substitutions). Distinct from any
+ *  literal string a user might write — a script saying `cmd "<dynamic>"`
+ *  produces `args: ["<dynamic>"]`, never `args: [DYNAMIC]`. */
+export const DYNAMIC: unique symbol = Symbol("shell-ast.DYNAMIC");
+
+export type ResolvedArg = string | typeof DYNAMIC;
 
 export interface ResolvedCall {
   cmd: string; // first argument value, e.g. "rm"
   flags: string[]; // all "-x" and "--foo" arguments, split from combined short flags
-  args: string[]; // non-flag positional arguments
+  args: ResolvedArg[]; // non-flag positional arguments; DYNAMIC for unresolvable
   raw: CallExprNode; // original AST node
 }
 
@@ -18,12 +26,26 @@ export function findCalls(ast: ShellFile): CallExprNode[] {
   return calls;
 }
 
-// wordToLit extracts the string value from a single-Lit Word.
-// Returns null if the word contains expansions or multiple parts.
+// wordToLit extracts the effective string value of a Word as it would
+// be passed to a command after shell quote-stripping. Returns null
+// when the value can't be statically resolved (variables, command
+// substitutions, multi-part juxtapositions).
+//
+// Handles:
+//   echo hello       → "hello"   (Lit)
+//   echo "hello"     → "hello"   (DblQuoted{Lit})
+//   echo 'hello'     → "hello"   (SglQuoted)
+//   echo "$x"        → null      (DblQuoted with ParamExp)
+//   echo "a"b        → null      (multi-part juxtaposition)
 export function wordToLit(w: Word): string | null {
-  const first = w.parts[0];
-  if (w.parts.length === 1 && first?.type === "Lit") {
-    return (first as LitNode).value;
+  if (w.parts.length !== 1) return null;
+  const p = w.parts[0];
+  if (!p) return null;
+  if (p.type === "Lit") return p.value;
+  if (p.type === "SglQuoted") return p.value;
+  if (p.type === "DblQuoted" && p.parts.length === 1) {
+    const inner = p.parts[0];
+    if (inner?.type === "Lit") return inner.value;
   }
   return null;
 }
@@ -37,13 +59,13 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
   if (firstLit === null) return null;
 
   const flags: string[] = [];
-  const args: string[] = [];
+  const args: ResolvedArg[] = [];
   let endOfFlags = false;
 
   for (const word of call.args.slice(1)) {
     const lit = wordToLit(word);
     if (lit === null) {
-      args.push("<dynamic>");
+      args.push(DYNAMIC);
       continue;
     }
     if (lit === "--") {

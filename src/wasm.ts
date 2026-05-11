@@ -32,7 +32,7 @@ interface GoInstance {
   run(instance: WebAssembly.Instance): void;
 }
 
-type ParseFn = (src: string, dialect?: string) => string;
+type ParseFn = (src: string, dialect?: string, splitBraces?: boolean) => string;
 
 let parseFn: ParseFn | null = null;
 let loadPromise: Promise<void> | null = null;
@@ -60,8 +60,8 @@ export function loadWasm(): Promise<void> {
   return loadPromise;
 }
 
-export function parseRaw(src: string, dialect?: string): string {
+export function parseRaw(src: string, dialect?: string, splitBraces?: boolean): string {
   if (parseFn === null)
     throw new Error("shell-ast: WASM not loaded — call loadWasm() first");
-  return parseFn(src, dialect);
+  return parseFn(src, dialect, splitBraces);
 }
