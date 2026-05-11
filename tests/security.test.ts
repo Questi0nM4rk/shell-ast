@@ -67,14 +67,18 @@ describe("dialect parameter actually changes parser behavior", () => {
     expect(ast.type).toBe("File");
   });
 
-  test("mksh dialect parses mksh-specific construct without throwing", async () => {
-    // mksh accepts ${|foo;} reply variable — bash does not.
+  test("mksh dialect parses mksh-specific reply variable", async () => {
+    // ${|...} originated in mksh as a "reply variable" form. mvdan/sh
+    // has historically accepted it under both bash and mksh dialects;
+    // we assert mksh works to keep at least one mksh-targeted fixture.
     const ast = await parse("${|x=1;}", "mksh");
     expect(ast.type).toBe("File");
   });
 
-  test("bash rejects mksh-only ${|...} reply variable", async () => {
-    await expect(parse("${|x=1;}", "bash")).rejects.toThrow();
+  test("posix rejects mksh ${ stmts;} grouping", async () => {
+    // ${ stmts;} (note the leading space) is mksh's value-substitution
+    // grouping. posix rejects it; bash and mksh accept.
+    await expect(parse("${ x=1;}", "posix")).rejects.toThrow();
   });
 });
 
