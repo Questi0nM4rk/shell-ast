@@ -15,9 +15,9 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           # Pinned to match the `go` directive in go.mod. mvdan/sh v3.13+
           # requires Go 1.25. Bump together when bumping mvdan/sh.

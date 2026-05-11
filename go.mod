@@ -3,7 +3,7 @@ module github.com/Questi0nM4rk/shell-ast
 go 1.25.0
 
 require (
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	mvdan.cc/sh/v3 v3.13.1
 )
 
