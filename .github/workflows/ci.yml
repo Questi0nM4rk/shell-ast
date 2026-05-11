@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TS dependencies
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Build WASM
+        run: bun run build:wasm
+
+      - name: Copy Go WASM runtime shim
+        run: cp -f "$(go env GOROOT)/lib/wasm/wasm_exec.js" src/wasm_exec.js
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Go tests
+        run: go test -v -race ./processor/...
+
+      - name: Bun tests
+        run: bun test
+
+      - name: Build TS
+        run: bun run build:ts
+
+      - name: Verify dist contents
+        run: |
+          test -f dist/index.js || { echo "missing dist/index.js"; exit 1; }
+          test -f dist/index.d.ts || { echo "missing dist/index.d.ts"; exit 1; }
+          test -f dist/semantic.js || { echo "missing dist/semantic.js"; exit 1; }
+          test -f dist/semantic.d.ts || { echo "missing dist/semantic.d.ts"; exit 1; }
+          test -f dist/shell-ast.wasm || { echo "missing dist/shell-ast.wasm"; exit 1; }
+          test -f dist/wasm_exec.js || { echo "missing dist/wasm_exec.js"; exit 1; }
+          ls -la dist/
