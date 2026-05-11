@@ -5,10 +5,24 @@ import "mvdan.cc/sh/v3/syntax"
 // withPos injects pos/end into a serializer's output map and returns
 // the same map. Every per-type serializer carries source positions,
 // so this collapses ~80 lines of repetition.
+//
+// Some mvdan/sh nodes — notably BraceExp and Word — compute Pos()/End()
+// by indexing into their first child. After syntax.SplitBraces emits
+// empty Words (e.g. for `{,}`), those calls panic with an out-of-range
+// index. We recover so a malformed sub-tree degrades to zero positions
+// instead of taking down the whole serialization.
 func withPos(n syntax.Node, m map[string]interface{}) map[string]interface{} {
-	m["pos"] = nodePos(n.Pos())
-	m["end"] = nodePos(n.End())
+	m["pos"] = safePos(n.Pos)
+	m["end"] = safePos(n.End)
 	return m
+}
+
+func safePos(fn func() syntax.Pos) (out NodePos) {
+	defer func() {
+		_ = recover()
+	}()
+	out = nodePos(fn())
+	return
 }
 
 // ─── Slice serializers (one per element type that appears in lists) ──

@@ -27,8 +27,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-          # Cache ~/.bun/install/cache between runs (keyed on bun.lockb if present).
-          cache: true
 
       - name: Install TS dependencies
         run: bun install --frozen-lockfile || bun install
