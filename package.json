@@ -1,6 +1,6 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
   "license": "MIT",
   "repository": {
