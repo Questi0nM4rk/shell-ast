@@ -48,6 +48,15 @@ jobs:
       - name: Go tests
         run: go test -v -race ./processor/...
 
+      - name: Go fuzz (30s per target, smoke only)
+        run: |
+          # Short, deterministic fuzz: catches regressions where
+          # mvdan/sh adds a node type we don't dispatch, or our
+          # serializer panics on a rare AST shape. Real fuzz runs
+          # would need much longer time budgets; this is a smoke.
+          go test -run=^$ -fuzz=^FuzzSerialize$ -fuzztime=30s ./processor/
+          go test -run=^$ -fuzz=^FuzzSerializeWithSplitBraces$ -fuzztime=30s ./processor/
+
       - name: Bun tests
         run: bun test
 
