@@ -116,3 +116,380 @@ Consumers can build on the same machine they install on. Cross-machine
 distribution (CI build → user install) is broken until BUG-001 is resolved.
 
 ---
+
+# Feature requests & API ergonomics
+
+The entries below were captured 2026-05-13 during a hook-kit ↔ ai-guardrails
+integration session. They aren't bugs in the strict sense — shell-ast 0.2.1
+works — but each one shows up as awkward, error-prone, or low-signal code in
+the consumer (hook-kit, the canonical major consumer). Code references are
+to `~/Projects/hook-kit` at the time of writing.
+
+---
+
+## BUG-002: `unwrapCall` returns `null` for bare wrapper invocations
+
+**Severity:** HIGH — forces every consumer to ship a `resolveFlags` fallback.
+
+**Reported:** 2026-05-13. Also filed upstream as `Questi0nM4rk/shell-ast#7`.
+
+**Symptom:** When a `WRAPPERS`-listed command (`bash`, `sh`, …) appears without
+an inner command — bare `bash`, `bash --version`, `bash -i`, the right side of
+`curl example.com | bash` — `unwrapCall` returns `null`. Every consumer that
+uses `unwrapCall` as the primary lens on a `CallExpr` loses the ability to
+detect bash/sh/etc. in those positions.
+
+### Where it bit us
+
+hook-kit's pipe-rule and command-rule machinery couldn't match `curl … | bash`
+(the canonical RCE pattern), and `cmd("bash").deny(…)` failed to fire on
+`bash --version`. Worked around in `src/engine/helpers.ts:resolveUnwrappedOrFallback`
+with a `resolveFlags` fallback used by both `rules/command.ts:87` and
+`rules/pipe.ts:73`. That helper becomes dead code the moment this lands.
+
+### Root cause
+
+`src/semantic.ts` `unwrapCall`, the wrapper-walk loop hits `if (i >=
+rawArgs.length) return null;`. That branch fires whenever the wrapper consumed
+all of its own arguments without finding a positional inner command. Treating
+"no inner command" as "this isn't a wrapper invocation, return as a plain call"
+would let `unwrapCall` stay the single, complete entry point.
+
+### Suggested fix
+
+```ts
+if (i >= rawArgs.length) {
+  return { wrapper: null, ...resolved };   // fall through to plain
+}
+```
+
+Same change for any other `return null` paths inside the wrapper logic that
+fire when "we couldn't find an inner command" (vs. "we hit something genuinely
+dynamic" — keep those returning null).
+
+### Impact
+
+Every downstream library currently writes the same `resolveFlags` workaround.
+A one-line shell-ast fix removes the boilerplate from every consumer.
+
+---
+
+## BUG-003: `UnwrappedCall` shape should be a discriminated union, not three nullable fields
+
+**Severity:** HIGH — biggest single source of caller-side confusion.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** The current shape
+
+```ts
+interface UnwrappedCall {
+  wrapper: string | null;
+  cmd: string | null;
+  flags: string[];
+  args: ResolvedArg[];
+  raw: CallExprNode;
+  commandString?: string;
+}
+```
+
+forces every consumer to figure out which of `wrapper` / `cmd` is the
+"name that matters" — and the answer depends on caller intent. Hook-kit
+ended up with `wrapper ?? cmd` in inline-shell detection
+(`src/engine/index.ts:99`) but `cmd ?? wrapper` in pipe-RHS resolution
+(`src/rules/pipe.ts:76`). Both are correct for their purpose, but the
+mirror-image idioms are confusing and the type system gives no help.
+
+### Suggested API
+
+```ts
+type UnwrappedCall =
+  | { kind: "plain";   cmd: string; flags: string[]; args: ResolvedArg[]; raw }
+  | { kind: "wrapped"; wrapper: string; cmd: string; flags: string[]; args: ResolvedArg[]; raw }   // sudo rm -rf /
+  | { kind: "shell";   wrapper: string; commandString: string; raw };                              // bash -c '…'
+```
+
+### Why this helps
+
+Consumers collapse to a single `switch (u.kind)` with each branch type-checked.
+`wrapper ?? cmd` and `cmd ?? wrapper` both disappear — `case "plain": u.cmd`,
+`case "wrapped": handle wrapper or cmd intentionally`, `case "shell":
+re-parse commandString`. TypeScript forces exhaustiveness. The
+`resolveUnwrappedOrFallback` helper in hook-kit would collapse into a sealed
+`switch` with no fallback path to maintain.
+
+### Impact
+
+This is the structural change that retires the most hook-kit boilerplate.
+Worth bundling with BUG-002's fix as a single breaking 0.3.0 release.
+
+---
+
+## BUG-004: `wordToLit` is binary — needs a "give me what you can" variant
+
+**Severity:** HIGH for security consumers.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** Today `wordToLit("rm -rf $DANGER")` returns `null` for the
+`$DANGER` arg because it's not a single literal. The caller has zero
+visibility into what got expanded. hook-kit's `argMatches(/secret/)` rule
+silently misses every command with any expansion.
+
+### Where it bit us
+
+Quoted-arg test at `tests/rules/cmd.test.ts:205` had to be rewritten when
+shell-ast 0.2.x changed quote semantics — and the v0.2.0 bundling bug
+returned the literal string `"<dynamic>"` for any non-resolvable arg, which
+hook-kit's regex tests then matched against (silently wrong). A richer
+return shape would have surfaced "this is dynamic; here's what we know" so
+the bug couldn't disguise itself as a literal.
+
+### Suggested API
+
+```ts
+type ArgFragment =
+  | { kind: "literal"; value: string }
+  | { kind: "dynamic"; sourceText: string };   // the raw source of the unresolved part
+
+function wordToParts(w: Word): ArgFragment[];   // never null, always informative
+```
+
+Keep `wordToLit` as a convenience that returns `parts.length === 1 &&
+parts[0].kind === "literal" ? parts[0].value : null` — preserves the
+current API while exposing the richer one underneath.
+
+### Why this helps
+
+hook-kit can write: "the command is `rm -rf` followed by a literal `--no-preserve-root`
+followed by a dynamic value — escalate." Today we only know "literal" or
+"give up." Materially better for security rules; eliminates a class of
+silent-allow regressions.
+
+---
+
+## BUG-005: Type guards exported alongside the `DYNAMIC` sentinel
+
+**Severity:** MEDIUM — refactor-safety.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** Today consumers narrow `ResolvedArg = string | typeof DYNAMIC`
+with `typeof a === "string"`. That's fragile — a bundling regression in
+shell-ast 0.2.0 produced the literal string `"<dynamic>"` in `dist/index.js`
+(see BUG-001 history), and the `typeof === "string"` narrowing was useless
+against it. The bundled shell-ast was effectively returning a value that
+passed every consumer's type guard but failed every semantic intent.
+
+### Suggested API
+
+```ts
+export function isDynamic(a: ResolvedArg): a is typeof DYNAMIC;
+export function isResolved(a: ResolvedArg): a is string;
+```
+
+### Where it would have helped
+
+hook-kit's regex match would have read
+
+```ts
+unwrapped.args.some(a => isResolved(a) && p.test(a))
+```
+
+instead of
+
+```ts
+unwrapped.args.some(a => typeof a === "string" && p.test(a))
+```
+
+The former breaks the moment shell-ast's compiled output ships a buggy
+sentinel; the latter silently keeps "working." Library-owned guards are
+the canonical way to insulate consumers from sentinel-shape changes.
+
+### Impact
+
+Cheap (10 lines of shell-ast), tightens every consumer's narrowing path,
+prevents an entire class of "compiled sentinel diverges from source
+sentinel" regressions.
+
+---
+
+## BUG-006: `findCalls` needs a `topLevel` option (and `findRedirects` a `writesOnly`)
+
+**Severity:** MEDIUM — consumer-side filter boilerplate.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** `findCalls(ast)` returns every `CallExpr` in the tree —
+including ones nested inside command substitutions
+(`echo $(rm -rf foo)`). Some hook-kit rules want to inspect every nested
+call (security); some want only the top-level invocation (pipe matching,
+inline-shell recursion). Today we walk the full set and re-filter, which
+is a meaningful pile of repeated tree-traversal logic.
+
+### Suggested API
+
+```ts
+function findCalls(ast: ShellFile, opts?: { topLevel?: boolean }): CallExprNode[];
+function findRedirects(ast: ShellFile, opts?: { writesOnly?: boolean }): Redirect[];
+function findAssignments(ast: ShellFile, opts?: { exportedOnly?: boolean }): Assign[];
+```
+
+Backwards-compatible (opts is optional). The implementation has the depth
+information already during the walk; exposing it is essentially free.
+
+### Why this helps
+
+hook-kit's `redirect()` rule currently re-walks the output of
+`findRedirects` to keep only write ops. The engine's inline-shell recursion
+re-filters for top-level shells. Both collapse to a one-line call.
+
+---
+
+## BUG-007: `unwrapCall` for `bash -c '…'` should return the parsed inner AST
+
+**Severity:** MEDIUM — saves a re-parse.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** Today, `unwrapCall(bash -c 'rm -rf /')` returns
+`{ wrapper: "bash", cmd: null, commandString: "rm -rf /" }`. Every consumer
+that wants to inspect the inner script (hook-kit's inline-shell recursion,
+any future RCE-detection rule) calls `parse(commandString)` again. shell-ast
+already had the parser warm; the consumer's re-parse is pure waste.
+
+### Suggested API
+
+Folded into the discriminated-union shape from BUG-003:
+
+```ts
+| { kind: "shell"; wrapper: string; innerAst: ShellFile; commandString: string; raw }
+```
+
+`commandString` stays for consumers that want the raw source (for log
+output, AI agent prompts, etc.); `innerAst` is the pre-parsed AST. Optional
+to populate — if shell-ast's parser already ran on the inner string for its
+own resolution, just hand it back.
+
+### Why this helps
+
+hook-kit's `extractInlineScript` helper in `src/engine/helpers.ts:140`
+disappears entirely — the recursion just reads `u.innerAst` and recurses.
+Inline-shell rules go from "extract string → re-parse → walk" to "walk
+inner AST." Net saving: one parser invocation per inline-shell call per
+event.
+
+---
+
+## BUG-008: `unwrapDeep(call)` for chained wrappers
+
+**Severity:** MEDIUM — correctness gap for layered wrappers.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** `sudo bash -c 'rm -rf /'` is three semantic layers: sudo wraps
+bash wraps an opaque script. Today `unwrapCall` peels one layer. The
+consumer has to inspect the result and decide whether to recurse on the
+remaining `bash -c '…'` themselves. hook-kit's current sudo-aware
+guarantee (`cmd("rm")` matches `sudo rm -rf /`) works for one-layer
+wrapping but I'm not confident it survives this chained case — and there's
+no test fixture for it.
+
+### Suggested API
+
+```ts
+function unwrapDeep(call: CallExprNode): UnwrappedCall[];   // outermost first
+```
+
+Returns the unwrap chain. `[sudo-layer, bash-layer]` for the example
+above. Consumer iterates and inspects each layer — natural representation
+for "is this `rm` anywhere in the invocation chain" rules.
+
+### Why this helps
+
+hook-kit's command rule can iterate the chain instead of recursing
+manually. Sudo-aware semantics extend naturally to N levels. Test fixtures
+become "given this chain, assert these decisions."
+
+---
+
+## BUG-009: `ParseError` should carry structured position + kind, not just a message
+
+**Severity:** LOW — quality-of-life for diagnostics.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** Today `parse()` throws a plain `Error` with a message like
+`"1:5: \`then\` must be followed by a statement list"`. hook-kit's BUG-001
+stderr warning dumps this string verbatim. A consumer that wanted to
+categorize errors (recoverable syntax vs. infrastructure failure) has to
+regex the message. The bundled WASM-load failure message
+(`"ENOENT … shell-ast.wasm"`) looks indistinguishable from a syntax error
+at the catch site.
+
+### Suggested API
+
+```ts
+class ParseError extends Error {
+  readonly line: number;
+  readonly col: number;
+  readonly kind: "syntax" | "wasm-load" | "wasm-runtime" | "size-limit";
+  readonly snippet?: string;
+}
+```
+
+### Why this helps
+
+hook-kit's BUG-001 warning could distinguish "shell-ast WASM failed to load
+(infra error)" from "this specific command was malformed (likely fine).
+The former should warn loudly once per process; the latter is normal.
+Today both look identical at the catch site.
+
+---
+
+## BUG-010: Export `loadWasm` / add `preloadWasm` from the public API
+
+**Severity:** LOW — startup latency optimization.
+
+**Reported:** 2026-05-13.
+
+**Symptom:** WASM loads lazily on the first `parse()` call. For
+compiled-binary consumers, that first-call latency lands in the hot path
+of evaluating a real user command. There's no way to warm the WASM ahead
+of time — `loadWasm` exists in `src/wasm.ts` but isn't re-exported from
+`src/index.ts`.
+
+### Suggested API
+
+```ts
+export async function preloadWasm(): Promise<void>;
+```
+
+Idempotent. Safe to call multiple times. Returns the same promise the
+first parse would internally.
+
+### Why this helps
+
+hook-kit's `runShell` in `src/wrapper/hk.ts` can call `await preloadWasm()`
+at binary startup, before parsing argv. Cold-start latency moves out of
+the first-rule evaluation. Adapter mode (`run()`) can do the same. No API
+break; pure additive.
+
+---
+
+# Priority ranking
+
+For a hook-kit cleanup pass, the highest-leverage items are:
+
+1. **BUG-002** — single-line fix, deletes the `resolveFlags` fallback in
+   every consumer.
+2. **BUG-003** — structural; biggest reduction in consumer-side ambiguity.
+   Worth bundling with BUG-002 in a 0.3.0 break.
+3. **BUG-004** — security-relevant; closes a class of silent-allow holes.
+4. **BUG-005** — small library change, prevents an entire bundling-regression
+   failure mode from recurring.
+
+BUG-006 through BUG-010 are quality-of-life — each removes a small amount
+of consumer boilerplate or unlocks an optimization, but none are
+load-bearing the way 002–005 are.
+
