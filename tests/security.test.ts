@@ -153,13 +153,9 @@ describe("privilege escalators (audit B1, B4)", () => {
   testCmd("runuser -u root rm -rf /", { wrapper: "runuser", cmd: "rm" });
   testCmd("setpriv --reuid 0 rm -rf /", { wrapper: "setpriv", cmd: "rm" });
   testCmd("sudo --user=root rm -rf /", { wrapper: "sudo", cmd: "rm" });
-  // su -c / sh -c put the inner command INSIDE -c's value as a string.
-  // unwrapCall returns commandString instead of cmd so the consumer
-  // can parse() it themselves.
-  testCmd(`su user -c "rm -rf /"`, {
-    wrapper: "su",
-    cmd: null,
-    commandString: "rm -rf /",
-  });
-  testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", cmd: null, commandString: "rm -rf /" });
+  // su -c / sh -c put the inner command INSIDE -c's value as a script
+  // string. unwrapCall returns kind:"wrapped-script" with the script
+  // field; consumers parse() it themselves (or use unwrapCallParsed).
+  testCmd(`su user -c "rm -rf /"`, { wrapper: "su", script: "rm -rf /" });
+  testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", script: "rm -rf /" });
 });

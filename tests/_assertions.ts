@@ -6,40 +6,53 @@
 // step over the whole test surface (see .github/workflows/ci.yml).
 //
 // Example:
-//   testCmd("rm -rf /", { cmd: "rm", flags: ["-r","-f"], args: ["/"] });
+//   testCmd("rm -rf /",                  { cmd: "rm", flags: ["-r","-f"], args: ["/"] });
+//   testCmd("sudo -u root rm /",         { wrapper: "sudo", cmd: "rm" });
+//   testCmd(`bash -c "rm -rf /"`,        { wrapper: "bash", script: "rm -rf /" });
 
 import { expect, test } from "bun:test";
 import type { ResolvedArg } from "../src/index.js";
 import { findCalls, parse, resolveFlags } from "../src/index.js";
+import type { UnwrappedCall } from "../src/semantic.js";
 import { unwrapCall } from "../src/semantic.js";
 
 type Dialect = "bash" | "posix" | "mksh";
 
 export interface ExpectedCmd {
-  // First-call assertions (applied to calls[0])
-  cmd?: string | null;
+  // ─── Discriminator-aware assertions ──────────────────────────────
+  /** If set, asserts the UnwrappedCall.kind exactly. Otherwise the
+   *  expected kind is derived from the other fields. */
+  kind?: UnwrappedCall["kind"];
+  /** Inner cmd name for `wrapped` and `plain` kinds. Set to undefined
+   *  to skip; setting to a string asserts a `wrapped`/`plain` result. */
+  cmd?: string;
+  /** Wrapper name for any wrapped variant. Set to null to assert
+   *  `plain` kind (no wrapper). */
+  wrapper?: string | null;
+  /** Asserts kind === "wrapped-script" and script equals this value. */
+  script?: string;
+
+  // ─── Field-level assertions (any kind) ───────────────────────────
   flags?: string[];
   args?: ResolvedArg[];
-  wrapper?: string | null;
-  commandString?: string;
   /** Exact length of calls[0].assigns (for FOO=bar cmd patterns). */
   assignsCount?: number;
 
-  // Whole-AST assertions
+  // ─── Whole-AST assertions ────────────────────────────────────────
   /** Names (Lit value) of every call in source order. */
   calls?: string[];
   /** Total number of CallExpr nodes. */
   callCount?: number;
 
-  // Negative
+  // ─── Negative ────────────────────────────────────────────────────
   /** Expect parse() to throw. true = any throw; RegExp = message must match. */
   throws?: boolean | RegExp;
 
-  // Parse options
+  // ─── Parse options ───────────────────────────────────────────────
   dialect?: Dialect;
   splitBraces?: boolean;
 
-  // Test-suite plumbing
+  // ─── Test-suite plumbing ─────────────────────────────────────────
   /** Override the auto-generated test name (defaults to the source). */
   name?: string;
   /** Skip this case without removing it. */
@@ -49,6 +62,30 @@ export interface ExpectedCmd {
 function callName(c: ReturnType<typeof findCalls>[number]): string {
   const part = c.args[0]?.parts[0];
   return part?.type === "Lit" ? part.value : "<dynamic>";
+}
+
+/** Derive the expected discriminator from the other fields when the
+ *  caller didn't specify `kind` explicitly. Allows existing tests to
+ *  keep working without rewriting every fixture. */
+function expectedKind(e: ExpectedCmd): UnwrappedCall["kind"] | null {
+  if (e.kind !== undefined) return e.kind;
+  if (e.script !== undefined) return "wrapped-script";
+  if (e.wrapper === null) return "plain";
+  if (e.wrapper !== undefined && e.cmd === undefined) return "wrapped-opaque";
+  if (e.wrapper !== undefined) return "wrapped";
+  if (e.cmd !== undefined) return "plain";
+  return null;
+}
+
+/** Read `wrapper` off any UnwrappedCall variant (returns null for plain). */
+function wrapperOf(u: UnwrappedCall): string | null {
+  return u.kind === "plain" ? null : u.wrapper;
+}
+
+/** Read `cmd` off variants that have one. */
+function cmdOf(u: UnwrappedCall): string | null {
+  if (u.kind === "plain" || u.kind === "wrapped") return u.cmd;
+  return null;
 }
 
 export function testCmd(src: string, expected: ExpectedCmd): void {
@@ -74,21 +111,35 @@ export function testCmd(src: string, expected: ExpectedCmd): void {
       expect(calls.length).toBe(expected.callCount);
     }
 
-    // Hoist single-call analyses so each per-field assertion just
-    // reads from the cached value. unwrapCall covers both wrapper and
-    // non-wrapper paths (it returns {wrapper: null, cmd: ...} for
-    // plain calls), so it's the source of truth for cmd.
     const first = calls[0];
     const u = first ? unwrapCall(first) : null;
     const r = first ? resolveFlags(first) : null;
 
-    if (expected.cmd !== undefined) expect(u?.cmd ?? null).toBe(expected.cmd);
-    if (expected.flags !== undefined) expect(r?.flags).toEqual(expected.flags);
-    if (expected.args !== undefined) expect(r?.args).toEqual(expected.args);
-    if (expected.wrapper !== undefined)
-      expect(u?.wrapper ?? null).toBe(expected.wrapper);
-    if (expected.commandString !== undefined) {
-      expect(u?.commandString).toBe(expected.commandString);
+    const wantKind = expectedKind(expected);
+    if (wantKind !== null) {
+      expect(u?.kind).toBe(wantKind);
+    }
+    if (expected.cmd !== undefined) {
+      expect(u ? cmdOf(u) : null).toBe(expected.cmd);
+    }
+    if (expected.wrapper !== undefined) {
+      expect(u ? wrapperOf(u) : null).toBe(expected.wrapper);
+    }
+    if (expected.script !== undefined) {
+      expect(u?.kind).toBe("wrapped-script");
+      if (u?.kind === "wrapped-script") {
+        expect(u.script).toBe(expected.script);
+      }
+    }
+    if (expected.flags !== undefined) {
+      // For wrapped/plain/wrapped-opaque, flags come from the unwrap
+      // shape; for wrapped-script the script value is separate so we
+      // still read flags from u. For consistency we read r.flags
+      // which is always the outer-call resolveFlags result.
+      expect(r?.flags).toEqual(expected.flags);
+    }
+    if (expected.args !== undefined) {
+      expect(r?.args).toEqual(expected.args);
     }
     if (expected.assignsCount !== undefined) {
       expect(first?.assigns.length).toBe(expected.assignsCount);
