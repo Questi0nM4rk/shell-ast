@@ -52,10 +52,14 @@ describe("unwrapCall", () => {
     expect(result!.cmd).toBe("rm");
   });
 
-  test("sudo with only own flags (no real command) returns null", () => {
+  test("sudo with only own flags (no inner command) surfaces as a non-wrapped call (gh #7)", () => {
     const call = makeCall("sudo", "-u", "root");
     const result = unwrapCall(call);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.wrapper).toBeNull();
+    expect(result?.cmd).toBe("sudo");
+    expect(result?.flags).toEqual(["-u"]);
+    expect(result?.args).toEqual(["root"]);
   });
 
   test("returns null for empty call", () => {

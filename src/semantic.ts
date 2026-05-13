@@ -1,5 +1,5 @@
 import type { ResolvedArg } from "./flags.js";
-import { resolveFlags, wordToLit } from "./flags.js";
+import { DYNAMIC, resolveFlags, wordToLit } from "./flags.js";
 import type { CallExprNode } from "./types.js";
 
 export type { ResolvedCall } from "./flags.js";
@@ -27,8 +27,33 @@ const SHELL_SCHEMA: WrapperSchema = {
 };
 
 const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
+  // sudo: short flags accept either space- or equals-form for their values;
+  // long flags accept both `--user=root` (longEq) and `--user root` (space).
+  // Include both short and long forms in flagsWithArg so space-form long
+  // flags are consumed correctly.
   sudo: {
-    flagsWithArg: new Set(["-u", "-g", "-h", "-D", "-C", "-p", "-r", "-t", "-T", "-U"]),
+    flagsWithArg: new Set([
+      "-u",
+      "-g",
+      "-h",
+      "-D",
+      "-C",
+      "-p",
+      "-r",
+      "-t",
+      "-T",
+      "-U",
+      "--user",
+      "--group",
+      "--host",
+      "--chdir",
+      "--close-from",
+      "--prompt",
+      "--role",
+      "--type",
+      "--command-timeout",
+      "--other-user",
+    ]),
     longEq: true,
   },
   doas: {
@@ -49,7 +74,16 @@ const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     positionalUser: true,
   },
   runuser: {
-    flagsWithArg: new Set(["-u", "-g", "-G", "-s"]),
+    flagsWithArg: new Set([
+      "-u",
+      "-g",
+      "-G",
+      "-s",
+      "--user",
+      "--group",
+      "--supp-group",
+      "--shell",
+    ]),
     longEq: true,
     commandFlag: "-c",
   },
@@ -65,7 +99,7 @@ const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     longEq: true,
   },
   su: {
-    flagsWithArg: new Set(["-s", "-G"]),
+    flagsWithArg: new Set(["-s", "-G", "--shell", "--supp-group"]),
     longEq: false,
     commandFlag: "-c",
     positionalUser: true,
@@ -122,12 +156,36 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
     if (schema.commandFlag && lit === schema.commandFlag) {
       const next = rawArgs[i + 1];
       const commandString = next ? wordToLit(next) : null;
-      if (commandString === null) break; // dynamic command string — give up
+      if (commandString === null) {
+        // Wrapper-with-commandFlag detected but the script value is
+        // missing or dynamic (`bash -c`, `bash -c $script`). The
+        // wrapper IS active — preserve that detection so consumers
+        // checking `wrapper === "bash"` for shell-execution still
+        // see it. Inner script is unresolvable (no commandString).
+        return {
+          wrapper: resolved.cmd,
+          cmd: null,
+          flags: resolved.flags,
+          args: resolved.args,
+          raw: call,
+        };
+      }
+      // Strip the consumed commandFlag value and any preceding wrapper
+      // flags from the surfaced args. The remainder (tokens after the
+      // commandString) is what bash's -c assigns to $0/$1/… inside the
+      // inner script; consumers see those as wrapper.args. Avoids the
+      // dual-representation where args still contains the script value
+      // alongside `commandString`.
+      const trailingArgs: ResolvedArg[] = [];
+      for (const w of rawArgs.slice(i + 2)) {
+        const t = wordToLit(w);
+        trailingArgs.push(t === null ? DYNAMIC : t);
+      }
       return {
         wrapper: resolved.cmd,
         cmd: null,
         flags: resolved.flags,
-        args: resolved.args,
+        args: trailingArgs,
         raw: call,
         commandString,
       };
@@ -153,7 +211,14 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
     break; // inner command
   }
 
-  if (i >= rawArgs.length) return null;
+  if (i >= rawArgs.length) {
+    // The wrapper-named command was invoked without an inner command
+    // (e.g. `bash`, `bash --version`, RHS of `curl … | bash`, `sudo -V`,
+    // `gosu user`). It isn't actually acting as a wrapper — return it
+    // as a normal non-wrapped call so consumers can still pattern-match
+    // on cmd/flags. Closes gh #7.
+    return { wrapper: null, ...resolved };
+  }
 
   const innerArgs = rawArgs.slice(i);
   const firstInner = innerArgs[0];
@@ -167,7 +232,19 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
     end: lastInner.end,
   };
   const innerResolved = resolveFlags(syntheticCall);
-  if (!innerResolved) return null;
+  if (!innerResolved) {
+    // Inner command is dynamic (`sudo $cmd`, `sudo -u root $cmd`). The
+    // wrapper IS active — preserve it so security consumers checking
+    // `wrapper === "sudo"` for privilege escalation still catch it.
+    // cmd:null + no commandString signals "wrapper used, inner unresolvable".
+    return {
+      wrapper: resolved.cmd,
+      cmd: null,
+      flags: resolved.flags,
+      args: resolved.args,
+      raw: call,
+    };
+  }
 
   return {
     wrapper: resolved.cmd,

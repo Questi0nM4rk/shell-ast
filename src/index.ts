@@ -90,6 +90,13 @@ export async function parse(
   dialect: "bash" | "posix" | "mksh" = "bash",
   options: ParseOptions = {}
 ): Promise<ShellFile> {
+  // Strip a leading UTF-8 BOM. mvdan/sh treats the BOM as part of the
+  // first token, producing unresolvable command names like "﻿echo".
+  // Files exported from Windows tooling frequently carry one.
+  if (src.charCodeAt(0) === 0xfeff) {
+    src = src.slice(1);
+  }
+
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const bytes = Buffer.byteLength(src, "utf8");
   if (bytes > maxBytes) {

