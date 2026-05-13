@@ -19,17 +19,21 @@ describe("wordToLit", () => {
     expect(wordToLit(w)).toBe("hello");
   });
 
-  test("returns null for multi-part word (dynamic)", () => {
+  test("folds multi-part static Word into single string (BUG-004)", () => {
+    // Pre-fix: this returned null because wordToLit was too strict.
+    // Post-fix: every fragment is statically resolvable, so the word
+    // resolves to the concatenation "helloworld" — matching what the
+    // command actually receives after quote-stripping.
     const w: Word = {
       type: "Word",
       parts: [makeLit("hello"), makeLit("world")],
       pos: makePos(),
       end: makePos(),
     };
-    expect(wordToLit(w)).toBeNull();
+    expect(wordToLit(w)).toBe("helloworld");
   });
 
-  test("returns null for non-Lit part", () => {
+  test("returns null for non-Lit part (genuinely dynamic)", () => {
     const w: Word = {
       type: "Word",
       parts: [
