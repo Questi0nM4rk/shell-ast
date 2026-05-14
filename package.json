@@ -1,15 +1,35 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.3.0",
-  "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
+  "version": "0.3.1",
+  "description": "Full typed AST for bash / posix / mksh — mvdan/sh compiled to WASM, exposed as TypeScript discriminated unions. Built for security tools that need to understand commands before they execute.",
   "license": "MIT",
+  "homepage": "https://github.com/Questi0nM4rk/shell-ast#readme",
+  "bugs": {
+    "url": "https://github.com/Questi0nM4rk/shell-ast/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Questi0nM4rk/shell-ast"
+    "url": "git+https://github.com/Questi0nM4rk/shell-ast.git"
   },
+  "keywords": [
+    "bash",
+    "shell",
+    "ast",
+    "parser",
+    "security",
+    "wasm",
+    "mvdan-sh",
+    "posix",
+    "mksh",
+    "typescript",
+    "discriminated-union",
+    "static-analysis",
+    "shellcheck"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -23,6 +43,13 @@
   "files": [
     "dist/"
   ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
   "scripts": {
     "build:wasm": "rm -rf dist && mkdir -p dist && GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor && cp \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" src/wasm_exec.js",
     "build:ts": "bun build src/index.ts src/semantic.ts --outdir dist --target node --asset-naming='[name].[ext]' && tsc --declaration --emitDeclarationOnly --outDir dist && cp src/wasm_exec.js dist/wasm_exec.js",
@@ -33,8 +60,8 @@
     "lint": "biome check src/ tests/"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.0",
-    "typescript": "^5.8.0",
-    "@types/bun": "^1.2.0"
+    "@biomejs/biome": "^2.4.0",
+    "typescript": "^6.0.0",
+    "@types/bun": "^1.3.0"
   }
 }

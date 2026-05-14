@@ -6,6 +6,8 @@
 
 [![npm](https://img.shields.io/npm/v/@questi0nm4rk/shell-ast?color=cb3837&label=npm)](https://www.npmjs.com/package/@questi0nm4rk/shell-ast)
 [![types](https://img.shields.io/npm/types/@questi0nm4rk/shell-ast?color=3178c6)](https://www.npmjs.com/package/@questi0nm4rk/shell-ast)
+[![bundle](https://img.shields.io/badge/wasm-4.2%20MB-7e57c2)](./dist)
+[![node](https://img.shields.io/node/v/@questi0nm4rk/shell-ast?color=339933)](./package.json)
 [![license](https://img.shields.io/npm/l/@questi0nm4rk/shell-ast?color=blue)](./LICENSE)
 [![CI](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml/badge.svg)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Questi0nM4rk/shell-ast?display_name=tag)](https://github.com/Questi0nM4rk/shell-ast/releases)
@@ -15,7 +17,9 @@
 ```typescript
 import { parse, findCalls, unwrapCall } from "@questi0nm4rk/shell-ast";
 
-for (const call of findCalls(await parse("sudo -u root rm -rf /"))) {
+const ast = await parse("sudo -u root rm -rf /");
+
+for (const call of findCalls(ast)) {
   const u = unwrapCall(call);
   if (u?.kind === "wrapped" && u.wrapper === "sudo" && u.cmd === "rm")
     console.log(`blocked: privilege-escalated rm with flags ${u.flags}`);
@@ -34,7 +38,7 @@ bun add @questi0nm4rk/shell-ast
 npm install @questi0nm4rk/shell-ast
 ```
 
-Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
+Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node ≥ 18, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
 
 > **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples. The discriminated-union change is mechanical.
 
@@ -60,14 +64,14 @@ $(rm -rf /)                 # CmdSubst: nested calls
 
 ## Highlights
 
-- **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Handles `sudo`, `doas`, `pkexec`, `su -c`, `bash -c`, `eval`, `exec`, and 7 more wrappers.
-- **`DYNAMIC` symbol sentinel** — distinguishes statically-resolvable args from `$variable` / `$(…)` substitutions. Type guards (`isResolved`, `isDynamic`) survive bundler regressions.
-- **`wordToParts(w)`** — never null; returns `{kind: "literal" | "dynamic", value/sourceText}` fragments. See the partial structure of `rm $DANGER /tmp`.
+- **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`.
+- **`DYNAMIC` symbol sentinel** — distinguishes statically-resolvable args from `$variable` / `$(…)` substitutions. Type guards (`isResolved`, `isDynamic`) survive bundler regressions that would silently turn a sentinel into the literal string `"<dynamic>"`.
+- **`wordToParts(w)`** — never null; returns `{kind: "literal" | "dynamic", value/sourceText}` fragments. See the partial structure of `rm $DANGER /tmp` instead of getting back `null`.
 - **Typed errors** — `ParseSyntaxError` / `ParseSizeError` / `WasmLoadError` / `WasmRuntimeError` with `.kind` discriminator. Catch sites distinguish "user input malformed" from "infra broken."
-- **`effectOf(node)` / `effectsOf(node)`** — structural effect classification (`exec`, `pipe`, `fs-write`, `fs-read`, `subshell`, `fork-detach`, 7 more) derived from operator enums, no command knowledge required.
+- **`effectOf(node)` / `effectsOf(node)`** — 13 structural effect kinds (`exec`, `pipe`, `fs-write`, `fs-read`, `fs-rw`, `fd-dup`, `subshell`, `fork-detach`, `capture-exec`, `compound-fs-read`, `compound-fs-write`, `env-write`, `env-prefix`) derived from operator enums. No command-name knowledge required.
 - **`findCalls(ast, { depth: "top" })`** — skip data-as-code subtrees (`$(…)`, `<(…)`, `{a,b,c}`) so pipe-rule and inline-shell logic don't need to re-filter.
 - **`preloadWasm()`** — idempotent warm-up to move WASM init out of the first-`parse()` hot path.
-- **ANSI-C unescape** — `$'\n'` resolves to a real newline. UTF-8 BOM stripped before parse. Multi-part static Words fold (`"foo""bar"` → `"foobar"`).
+- **ANSI-C unescape** — `$'\n'` resolves to a real newline. UTF-8 BOM stripped before parse. Multi-part static `Word`s fold (`"foo""bar"` → `"foobar"`).
 
 ---
 
@@ -95,7 +99,7 @@ async function check(input: string): Promise<string | null> {
           return "blocked: git push --force";
         break;
       case "wrapped-script":
-        return await check(u.script);  // recurse into bash -c "..."
+        return await check(u.script); // recurse into bash -c "..."
       case "wrapped-opaque":
         if (u.wrapper === "sudo" || u.wrapper === "doas")
           return `escalation with dynamic inner (${u.wrapper})`;
@@ -125,11 +129,19 @@ for (const r of findRedirects(ast, { ops: "write" })) {
 import { parse, findCalls } from "@questi0nm4rk/shell-ast";
 
 const ast = await parse("cat /etc/passwd | grep root | wc -l");
-const names = findCalls(ast, { depth: "top" }).map(c => {
+const names = findCalls(ast, { depth: "top" }).map((c) => {
   const part = c.args[0]?.parts[0];
   return part?.type === "Lit" ? part.value : "<dynamic>";
 });
 // ["cat", "grep", "wc"]
+```
+
+### Pre-warm WASM at startup (compiled binaries)
+
+```typescript
+import { preloadWasm } from "@questi0nm4rk/shell-ast";
+
+await preloadWasm(); // idempotent; the first parse() is now instant
 ```
 
 ---
@@ -166,9 +178,9 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 | Parser | mvdan/sh v3 | tree-sitter | mvdan/sh v3 |
 | AST exposed | Positions only | Generic `{type, children}` | **Full typed tree** |
 | TypeScript types | `{Pos, End}` | Untyped nodes | **Discriminated union** |
-| Wrapper unwrap (sudo / bash -c / …) | ✗ | ✗ | **✓** |
+| Wrapper unwrap (sudo / bash -c / …) | ✗ | ✗ | **✓ (17 wrappers)** |
 | Flag canonicalization (`-rf` → `[-r, -f]`) | ✗ | ✗ | **✓** |
-| Effect classification | ✗ | ✗ | **✓** |
+| Effect classification | ✗ | ✗ | **✓ (13 kinds)** |
 | POSIX / mksh dialects | ✓ | partial | **✓** |
 | Quoted-flag bypass (`rm "-rf"` ≡ `rm -rf`) | ✗ | ✗ | **✓** |
 | Compiled-binary support (`bun build --compile`) | broken | partial | **✓** |
@@ -177,10 +189,22 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Quality bar
 
-- **167 TypeScript tests** + **49 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
+- **167 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
 - **Two regression smokes** baked into CI — compiled-binary deployment ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)), consumer install from-elsewhere ([BUG-001](./docs/BUGS.md))
-- **No process execution at the test surface** — CI greps the source for `child_process`/`Bun.spawn`/`exec`/`spawn`/`Deno.run` and fails the build on any match
+- **No process execution at the test surface** — CI greps the source tree for `child_process` / `node:child_process` / `worker_threads` / `node:worker_threads` / `node:vm` / `execSync` / `spawnSync` / `Bun.spawn` / `Deno.run` / `Deno.Command` and fails the build on any match. The library parses shell strings; the test suite must never run them.
 - **Dependabot-tracked** for Go, npm, and GitHub Actions ecosystems
+
+---
+
+## Compatibility
+
+| Runtime | Status |
+|---|---|
+| Node.js ≥ 18 | ✓ ESM only (this package is `"type": "module"`) |
+| Bun ≥ 1.3 | ✓ |
+| `bun build --compile` standalone binary | ✓ — verified by CI smoke test ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)) |
+| Deno | should work via `npm:` specifier; not in CI |
+| Browsers | not supported (uses Node WASI shim) |
 
 ---
 
@@ -195,7 +219,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Development
 
-Prerequisites: Go ≥ 1.25, Bun ≥ 1.3.
+Prerequisites: Go ≥ 1.25, Bun ≥ 1.3, TypeScript 6 (installed as a devDependency).
 
 ```bash
 git clone https://github.com/Questi0nM4rk/shell-ast
@@ -203,10 +227,23 @@ cd shell-ast
 bun install
 bun run build      # build wasm + bundle ts
 bun test           # 167 TypeScript tests
-go test ./processor/...    # 49 Go tests + schema lock
+go test ./processor/...    # 52 Go tests + 44-case schema lock
 ```
 
-`bun run prepublishOnly` runs the full release gate (lint, typecheck, both test suites, build, smoke tests).
+`bun run prepublishOnly` runs the full release gate: `lint → typecheck → go test → bun test → build`.
+
+### Releasing
+
+Releases are cut manually — there is no auto-publish workflow. To ship a new version:
+
+```bash
+bun run prepublishOnly         # run the full gate locally
+npm version patch              # or minor / major; bumps package.json + tag
+npm publish                    # publishConfig.access is already "public"
+git push --follow-tags
+```
+
+`publishConfig.access` is set to `"public"` so the scoped package will not be silently rejected as private. Provenance attestations are off by default; turn them on per-publish with `npm publish --provenance` if running from CI with `id-token: write`.
 
 ---
 
