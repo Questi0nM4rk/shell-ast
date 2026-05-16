@@ -92,6 +92,11 @@ export interface ExtractRedirectOptions {
   /** `"all"` (default), `"write"` (`>`/`>>`/`&>`/etc.), `"read"`
    *  (`<`/`<<`/`<<<`). Heredoc and here-string forms count as reads. */
   ops?: "all" | "write" | "read";
+  /** `"any"` (default): every Redirect in the tree, including inside
+   *  command substitutions and brace expansions.
+   *  `"top"`: only redirects in the visible execution context — skips
+   *  CmdSubst, ProcSubst, and BraceExp subtrees (parity with findCalls). */
+  depth?: "any" | "top";
 }
 
 export function findRedirects(
@@ -104,8 +109,26 @@ export function findRedirects(
       : opts.ops === "read"
         ? (r: Redirect) => READ_OPS.has(r.op)
         : null;
-  const all = findAll(ast, "Redirect");
-  return filter ? all.filter(filter) : all;
+  if (opts.depth !== "top") {
+    const all = findAll(ast, "Redirect");
+    return filter ? all.filter(filter) : all;
+  }
+  const out: Redirect[] = [];
+  walk(ast, {
+    Redirect(node) {
+      if (!filter || filter(node)) out.push(node);
+    },
+    CmdSubst() {
+      return "skip";
+    },
+    ProcSubst() {
+      return "skip";
+    },
+    BraceExp() {
+      return "skip";
+    },
+  });
+  return out;
 }
 
 // ─── findAssignments + exportedOnly filter (BUG-006) ─────────────────────────
