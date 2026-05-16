@@ -1,5 +1,110 @@
 # shell-ast — Known Bugs
 
+## BUG-000: Global value-taking flags (`-C`, `-H`, `--context`, …) shift positional args, breaking subcommand-position matching downstream
+
+**Status:** FIXED in v0.4.0 (2026-05-15). `resolveFlags` now consults a per-tool `GLOBAL_VALUE_FLAGS` table (`src/flags.ts`) covering `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / doas / pkexec / etc. inherit the table on the inner call automatically because `unwrapCall` re-runs `resolveFlags` after wrapper-stripping.
+
+**Severity:** HIGH — security-relevant. Allows trivial bypass of subcommand-position rules in consumers built on shell-ast (e.g. hook-kit's `cmd(prog, "sub")` matcher).
+
+**Reported:** 2026-05-14 (during hook-kit 0.5.0 work; also flagged in hook-kit/CLAUDE.md as a known limitation since 0.4.x).
+
+### Symptom (reproducer on hook-kit 0.5.0)
+
+```ts
+const rule = cmd("git", "worktree", "add").deny("blocked");
+
+// Fires as expected:
+await runModule({ module: ..., command: "git worktree add /tmp/x" });
+// → terminal.kind === "deny"
+
+// Slips through:
+await runModule({ module: ..., command: "git -C /tmp worktree add /tmp/x" });
+// → terminal === null
+```
+
+The same bypass shape works against `docker -H tcp://… run`, `kubectl --context prod get …`, `make -C /repo build`, `tar -C /target …`, etc. — every UNIX tool that accepts a leading value-taking global flag.
+
+### Root cause
+
+`resolveFlags` (and `unwrapCall`'s positional-args extraction) treats every leading `-X / --x` token as a boolean flag with no value-consumption rule. For `git -C /tmp worktree add`, the parsed call is:
+
+```
+{ cmd: "git", flags: ["-C"], args: ["/tmp", "worktree", "add"] }
+```
+
+— `/tmp` ends up in `args[0]` instead of being consumed as the value of `-C`. Consumers that match on `args[0] === "worktree"` (hook-kit's subcommand-position predicate) see `args[0] === "/tmp"` and silently miss.
+
+### Why hook-kit can't paper over this
+
+We considered building per-tool global-flag tables into hook-kit's `CommandRuleBuilder` (e.g. "for `git`, treat `-C` as value-taking before positional matching"). Rejected because:
+
+1. **Scope blow-up.** Every consumer of shell-ast would need to maintain its own table — `git`, `docker`, `kubectl`, `make`, `tar`, `find`, `xargs`, `ssh -o`, `curl -H`, … The list grows with every popular tool.
+2. **Drift risk.** Tables in consumers drift out of sync with the actual CLI behavior. The truth lives in the parser, not in downstream rule libraries.
+3. **Security boundary.** A silent bypass is a deny-class bug. Closest-to-source fix wins — we want one place to audit, not N.
+
+### How the v0.4.0 fix works
+
+`resolveFlags(call)` looks up `call.cmd` in a private `GLOBAL_VALUE_FLAGS: Record<string, ReadonlySet<string>>` table. When the next token starts with `-` and matches an entry in the tool's set, `resolveFlags` consumes the FOLLOWING token as the flag's value (whether literal or dynamic) and excludes it from `args`. Unlisted tools fall back to the legacy "every `-X` is boolean" behavior — no regression for code that wasn't on the affected paths.
+
+Verified shapes (test fixtures in `tests/global-flags.test.ts`):
+
+| Input | flags | args |
+|---|---|---|
+| `git -C /tmp worktree add /tmp/x` | `["-C"]` | `["worktree", "add", "/tmp/x"]` |
+| `git -c color.ui=auto -C /tmp status` | `["-c", "-C"]` | `["status"]` |
+| `docker -H tcp://prod:2375 run nginx` | `["-H"]` | `["run", "nginx"]` |
+| `kubectl --context prod get pods` | `["--context"]` | `["get", "pods"]` |
+| `make -C /repo -f Makefile.prod build` | `["-C", "-f"]` | `["build"]` |
+| `sudo git -C /tmp worktree add` (post-`unwrapCall`) | `["-C"]` | `["worktree", "add"]` |
+| `frobnicate -X /tmp do-it` (unlisted) | `["-X"]` | `["/tmp", "do-it"]` |
+
+### Known limitations of the v0.4.0 fix
+
+1. **`-Cvalue` (concatenated short form) is not consumed** — only the space-separated `-C value` form. `git -C/tmp` still parses with `-C/tmp` as a single literal flag token.
+2. **Tool name match is exact** — `git` looks up the table; `/usr/bin/git` does not. Consumers using full paths should normalize first.
+3. **`xargs cmd args…` boundary not detected** — `resolveFlags` consumes `-I {} -n 1` correctly, but does not know that the rest of the line is xargs's command-to-run, so `-rf` gets expanded as combined short flags. Consumers needing inner-cmd-as-a-unit should locate the first non-flag arg and slice from there.
+4. **Dynamic values are silently consumed**, not exposed in a separate `flagValues` map. `git -C "$DIR" worktree add` produces `flags: ["-C"], args: ["worktree", "add"]`. Tracking flag-value pairs (literal or DYNAMIC) is deferred to v0.5.0.
+
+### Original design space (preserved for context)
+
+The natural shape is per-tool *global-flag tables* in the resolver, consulted before positional-arg accumulation. Something like:
+
+```ts
+// shell-ast internal table — extend as needed
+const GLOBAL_VALUE_FLAGS: Record<string, readonly string[]> = {
+  git:     ["-C", "-c", "--git-dir", "--work-tree", "--namespace"],
+  docker:  ["-H", "--host", "--config", "--context"],
+  kubectl: ["--context", "--cluster", "--namespace", "-n", "--kubeconfig"],
+  make:    ["-C", "--directory", "-f", "--file"],
+  tar:     ["-C", "--directory", "-f", "--file"],
+  // ...
+};
+
+function resolveFlags(call: CallExprNode): UnwrappedCall {
+  const cmd = wordToLit(call.cmd);
+  const valueFlags = new Set(GLOBAL_VALUE_FLAGS[cmd ?? ""] ?? []);
+  // Walk call.args; when token starts with a known value-flag, consume the
+  // next arg as its value. Otherwise positional. (Already handles `--flag=value`
+  // because the `=` form keeps positional alignment intact.)
+}
+```
+
+**Open design questions for the shell-ast maintainer to decide:**
+
+1. **Per-tool table location.** Inline (as above), opt-in via `parse(src, { globalFlags: {...} })`, or pluggable registry? The pluggable route lets niche tools register their own without bloating the core table, but adds an API surface.
+2. **Long/short equivalence.** `-C` vs `--directory` for make — the table needs both, or the resolver needs a separate alias step. Keep flat for now and let consumers extend.
+3. **Inheritance through sudo/wrappers.** `sudo git -C /tmp worktree add` — does the global-flag table apply to the inner `git` post-unwrap? It should; check that `unwrapCall` re-runs flag resolution after sudo strip.
+4. **What about totally unknown tools?** Default to current behavior (treat all leading `-X` as boolean). The table is opt-in coverage, not a regression for unlisted tools.
+
+### Why "at the top of BUGS.md"
+
+This sits above BUG-001 (WASM path) because:
+- BUG-001 has a known fix path (lazy WASM resolution); this one needs a design decision.
+- Consumers can workaround BUG-001 (don't `bun build --compile`); they cannot workaround this without rebuilding the same per-tool table client-side, which is exactly the scope-blow-up we're trying to avoid.
+- It's the closest the shell-ast → hook-kit → ai-guardrails stack has to a quiet-bypass class of bug. Worth surfacing first to readers.
+
+---
+
 ## BUG-001: WASM path baked at compile time breaks `bun build --compile`
 
 **Severity:** CRITICAL — silently breaks all consumers that compile a binary.
