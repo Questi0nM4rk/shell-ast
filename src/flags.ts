@@ -104,6 +104,7 @@ function wordPartSourceText(p: Word["parts"][number]): string {
     case "DblQuoted":
       return `"${dblQuotedSourceText(p.parts)}"`;
     case "ParamExp":
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal "${...}" is the shell source-text representation we emit for braced ParamExp without a resolvable name
       return p.short && p.param ? `$${p.param.value}` : "${...}";
     case "CmdSubst":
       return p.backquotes ? "`...`" : "$(...)";
@@ -135,13 +136,18 @@ export function unescapeAnsiC(s: string): string {
   let out = "";
   let i = 0;
   while (i < s.length) {
-    const c = s[i]!;
+    // charAt is the typed-safe sibling of indexed access here: it returns
+    // "" past end-of-string instead of `string | undefined`, but the
+    // `while (i < s.length)` invariant guarantees we never hit the empty
+    // case for `c`. `next` may be empty when `i + 1 === s.length`, which
+    // the explicit length check below handles.
+    const c = s.charAt(i);
     if (c !== "\\" || i + 1 >= s.length) {
       out += c;
       i++;
       continue;
     }
-    const next = s[i + 1]!;
+    const next = s.charAt(i + 1);
     switch (next) {
       case "a":
         out += "\x07";
@@ -306,6 +312,103 @@ function isCombinedShortFlag(s: string): boolean {
   return true;
 }
 
+// ─── BUG-000: per-tool global value-flag tables ──────────────────────────────
+
+/** Per-tool table of *value-taking* global flags that consume the next
+ *  positional token as their value rather than acting as boolean flags.
+ *
+ *  Without this, `git -C /tmp worktree add /tmp/x` would parse as
+ *  `{flags: ["-C"], args: ["/tmp", "worktree", "add", "/tmp/x"]}` —
+ *  silently breaking subcommand-position rules in security consumers
+ *  that match `args[0] === "worktree"`. With the table, `-C` is
+ *  recognized as value-taking, `/tmp` is consumed as its value, and
+ *  `args[0]` lines up with the user-perceived first positional.
+ *
+ *  Coverage is opt-in per tool; unlisted tools fall back to the legacy
+ *  "every -X is boolean" behavior. The `--longflag=value` form needs
+ *  no special handling — the `=` keeps positional alignment intact.
+ *
+ *  Limitations (documented in BUG-000):
+ *    - `-Cvalue` (concatenated short form, e.g. `git -C/tmp`) is NOT
+ *      consumed; only the space-separated `-C value` form is.
+ *    - The match is on the literal first arg; full paths like
+ *      `/usr/bin/git` will not look up the `git` row. */
+const GLOBAL_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  git: new Set([
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--exec-path",
+    "--super-prefix",
+    "--config-env",
+  ]),
+  docker: new Set([
+    "-H",
+    "--host",
+    "--config",
+    "--context",
+    "--log-level",
+    "--tlscacert",
+    "--tlscert",
+    "--tlskey",
+  ]),
+  kubectl: new Set([
+    "-n",
+    "--namespace",
+    "-s",
+    "--server",
+    "--context",
+    "--cluster",
+    "--kubeconfig",
+    "--token",
+    "--user",
+    "--as",
+    "--as-group",
+    "--certificate-authority",
+    "--client-certificate",
+    "--client-key",
+  ]),
+  make: new Set([
+    "-C",
+    "--directory",
+    "-f",
+    "--file",
+    "--makefile",
+    "-I",
+    "--include-dir",
+    "-j",
+    "--jobs",
+    "-l",
+    "--load-average",
+    "-o",
+    "--old-file",
+    "--assume-old",
+    "-W",
+    "--what-if",
+  ]),
+  tar: new Set(["-C", "--directory", "-f", "--file"]),
+  xargs: new Set([
+    "-I",
+    "-n",
+    "--max-args",
+    "-P",
+    "--max-procs",
+    "-d",
+    "--delimiter",
+    "-E",
+    "-L",
+    "--max-lines",
+    "-s",
+    "--max-chars",
+    "-a",
+    "--arg-file",
+  ]),
+};
+
+const EMPTY_VALUE_FLAGS: ReadonlySet<string> = new Set();
+
 export function resolveFlags(call: CallExprNode): ResolvedCall | null {
   if (call.args.length === 0) return null;
 
@@ -314,25 +417,47 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
   const firstLit = wordToLit(firstArg);
   if (firstLit === null) return null;
 
+  const valueFlags = GLOBAL_VALUE_FLAGS[firstLit] ?? EMPTY_VALUE_FLAGS;
+
   const flags: string[] = [];
   const args: ResolvedArg[] = [];
   let endOfFlags = false;
 
-  for (const word of call.args.slice(1)) {
+  // Index loop (not for-of) so a value-taking global flag can consume
+  // the following token as its value by advancing i.
+  const rest = call.args.slice(1);
+  let i = 0;
+  while (i < rest.length) {
+    const word = rest[i];
+    if (!word) {
+      i++;
+      continue;
+    }
     const lit = wordToLit(word);
     if (lit === null) {
       args.push(DYNAMIC);
+      i++;
       continue;
     }
     // Only the FIRST literal `--` toggles end-of-flags. After that,
     // a `--` token is itself a positional argument.
     if (lit === "--" && !endOfFlags) {
       endOfFlags = true;
+      i++;
       continue;
     }
     // POSIX convention: a bare `-` is a positional (stdin sentinel),
     // not a flag.
     if (!endOfFlags && lit.startsWith("-") && lit !== "-") {
+      // Value-taking global flag for this tool: consume the next token
+      // as the flag's value (whether literal or dynamic). The value is
+      // silently dropped from `args` — it is not a positional.
+      if (valueFlags.has(lit)) {
+        flags.push(lit);
+        if (i + 1 < rest.length) i++;
+        i++;
+        continue;
+      }
       if (isCombinedShortFlag(lit)) {
         for (const ch of lit.slice(1)) flags.push(`-${ch}`);
       } else {
@@ -341,6 +466,7 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
     } else {
       args.push(lit);
     }
+    i++;
   }
 
   return { cmd: firstLit, flags, args, raw: call };

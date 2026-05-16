@@ -46,6 +46,19 @@
           "suspicious": { "noConsole": "off" }
         }
       }
+    },
+    {
+      // Tests own their fixture inputs — `ast.stmts[0]!` is the standard
+      // shape for "the test asserts what it constructs", and a null deref
+      // is a test failure already. Tests also legitimately contain literal
+      // shell `${...}` strings in fixtures (we're a shell parser).
+      "includes": ["tests/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": { "noNonNullAssertion": "off" },
+          "suspicious": { "noTemplateCurlyInString": "off" }
+        }
+      }
     }
   ]
 }

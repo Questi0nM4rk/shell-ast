@@ -118,7 +118,11 @@ export class WasmRuntimeError extends ShellAstError {
 function parseLocation(msg: string): { line?: number; col?: number; rest: string } {
   const m = msg.match(/^(\d+):(\d+):\s*(.+)$/s);
   if (!m) return { rest: msg };
-  return { line: Number(m[1]), col: Number(m[2]), rest: m[3]! };
+  const [, line, col, rest] = m;
+  if (line === undefined || col === undefined || rest === undefined) {
+    return { rest: msg };
+  }
+  return { line: Number(line), col: Number(col), rest };
 }
 
 function snippetAt(src: string, line: number, col: number): string {

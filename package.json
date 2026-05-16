@@ -1,6 +1,6 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Full typed AST for bash / posix / mksh — mvdan/sh compiled to WASM, exposed as TypeScript discriminated unions. Built for security tools that need to understand commands before they execute.",
   "license": "MIT",
   "homepage": "https://github.com/Questi0nM4rk/shell-ast#readme",

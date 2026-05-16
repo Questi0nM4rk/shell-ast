@@ -40,7 +40,9 @@ npm install @questi0nm4rk/shell-ast
 
 Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node ≥ 18, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
 
-> **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples. The discriminated-union change is mechanical.
+> **What's new in 0.4.0** ([changelog](./docs/MIGRATION-v0.4.0.md)) — `resolveFlags` now understands per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). `git -C /tmp worktree add` now leaves `args[0] === "worktree"` instead of leaking `/tmp` — closes [BUG-000](./docs/BUGS.md). Behavior change for consumers parsing those tools; details and migration in the linked doc.
+>
+> **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples for the v0.3.0 discriminated-union change.
 
 ---
 
@@ -65,6 +67,7 @@ $(rm -rf /)                 # CmdSubst: nested calls
 ## Highlights
 
 - **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`.
+- **Per-tool global value-flag tables** *(new in 0.4.0)* — `git -C /tmp worktree add` parses with `args: ["worktree", "add"]`, not `args: ["/tmp", "worktree", "add"]`. Covers `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / wrapper unwrapping inherits the table on the inner call automatically. Closes [BUG-000](./docs/BUGS.md).
 - **`DYNAMIC` symbol sentinel** — distinguishes statically-resolvable args from `$variable` / `$(…)` substitutions. Type guards (`isResolved`, `isDynamic`) survive bundler regressions that would silently turn a sentinel into the literal string `"<dynamic>"`.
 - **`wordToParts(w)`** — never null; returns `{kind: "literal" | "dynamic", value/sourceText}` fragments. See the partial structure of `rm $DANGER /tmp` instead of getting back `null`.
 - **Typed errors** — `ParseSyntaxError` / `ParseSizeError` / `WasmLoadError` / `WasmRuntimeError` with `.kind` discriminator. Catch sites distinguish "user input malformed" from "infra broken."
@@ -189,7 +192,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Quality bar
 
-- **167 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
+- **184 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
 - **Two regression smokes** baked into CI — compiled-binary deployment ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)), consumer install from-elsewhere ([BUG-001](./docs/BUGS.md))
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `node:child_process` / `worker_threads` / `node:worker_threads` / `node:vm` / `execSync` / `spawnSync` / `Bun.spawn` / `Deno.run` / `Deno.Command` and fails the build on any match. The library parses shell strings; the test suite must never run them.
 - **Dependabot-tracked** for Go, npm, and GitHub Actions ecosystems
@@ -210,6 +213,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Docs
 
+- [**docs/MIGRATION-v0.4.0.md**](./docs/MIGRATION-v0.4.0.md) — what changed in 0.4.0 (per-tool global flag tables) and how to update consumer code
 - [**docs/MIGRATION-v0.3.0.md**](./docs/MIGRATION-v0.3.0.md) — search-and-replace cheatsheet + per-API examples for v0.2.x consumers
 - [**docs/BUGS.md**](./docs/BUGS.md) — consumer-pain log; each entry cites the consumer file:line where friction shows up
 - [**docs/AUDIT.md**](./docs/AUDIT.md) — internal codebase audit history
@@ -226,7 +230,7 @@ git clone https://github.com/Questi0nM4rk/shell-ast
 cd shell-ast
 bun install
 bun run build      # build wasm + bundle ts
-bun test           # 167 TypeScript tests
+bun test           # 184 TypeScript tests
 go test ./processor/...    # 52 Go tests + 44-case schema lock
 ```
 
