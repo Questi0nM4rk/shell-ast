@@ -7,7 +7,7 @@
 // become impossible to construct.
 
 import type { ResolvedArg } from "./flags.js";
-import { DYNAMIC, resolveFlags, wordToLit } from "./flags.js";
+import { DYNAMIC, type ResolveFlagsOptions, resolveFlags, wordToLit } from "./flags.js";
 import type { CallExprNode, ShellFile } from "./types.js";
 
 export type { ResolvedArg, ResolvedCall } from "./flags.js";
@@ -202,8 +202,11 @@ export type UnwrappedCall =
  *  Returns null only for truly malformed input (CallExpr with no args
  *  at all — pure assignment-only stmts). All other shapes resolve to
  *  one of the four discriminator kinds. */
-export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
-  const resolved = resolveFlags(call);
+export function unwrapCall(
+  call: CallExprNode,
+  opts?: ResolveFlagsOptions
+): UnwrappedCall | null {
+  const resolved = resolveFlags(call, opts);
   if (!resolved) return null;
 
   const schema = WRAPPERS[resolved.cmd];
@@ -303,7 +306,7 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
     pos: firstInner.pos,
     end: lastInner.end,
   };
-  const innerResolved = resolveFlags(syntheticCall);
+  const innerResolved = resolveFlags(syntheticCall, opts);
   if (!innerResolved) {
     // Inner is dynamic (`sudo $cmd`). Wrapper detection preserved.
     return {
@@ -377,9 +380,10 @@ function unwrapPositionalScript(
  *  The public `parse` from `src/index.ts` is the expected argument. */
 export async function unwrapCallParsed(
   call: CallExprNode,
-  parse: (src: string) => Promise<ShellFile>
+  parse: (src: string) => Promise<ShellFile>,
+  opts?: ResolveFlagsOptions
 ): Promise<UnwrappedCall | null> {
-  const u = unwrapCall(call);
+  const u = unwrapCall(call, opts);
   if (!u || u.kind !== "wrapped-script") return u;
   try {
     const innerAst = await parse(u.script);

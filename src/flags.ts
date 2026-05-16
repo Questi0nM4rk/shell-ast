@@ -289,10 +289,33 @@ export function wordToLit(w: Word): string | null {
 // ─── ResolvedCall + resolveFlags ─────────────────────────────────────────────
 
 export interface ResolvedCall {
-  cmd: string; // first argument value, e.g. "rm"
+  cmd: string; // first argument value, e.g. "rm" (original; path preserved)
   flags: string[]; // all "-x" and "--foo" arguments, split from combined short flags
+  /** Values captured for each value-taking flag the resolver recognized
+   *  (from the built-in GLOBAL_VALUE_FLAGS table merged with any
+   *  consumer-provided ResolveFlagsOptions.globalFlags). Both `--git-dir=X`
+   *  and `--git-dir X` populate the same key. Same flag appearing
+   *  multiple times appends to the array. Dynamic values appear as
+   *  DYNAMIC. Empty record when no value-flags fired. */
+  flagValues: Record<string, ResolvedArg[]>;
   args: ResolvedArg[]; // non-flag positional arguments; DYNAMIC for unresolvable
   raw: CallExprNode; // original AST node
+}
+
+/** Options for resolveFlags / unwrapCall. */
+export interface ResolveFlagsOptions {
+  /** Additional value-taking flags per tool, merged on top of the
+   *  built-in GLOBAL_VALUE_FLAGS table. Tool name is matched against
+   *  the basename of `call.args[0]` (so `/usr/bin/git` matches the
+   *  `git` row). Lookup is per-call; no module state.
+   *
+   *  Example:
+   *  ```ts
+   *  resolveFlags(call, { globalFlags: { terraform: ["-chdir", "-state"] } });
+   *  ```
+   *  makes `terraform -chdir /tf apply` resolve with `-chdir` consuming
+   *  `/tf` as its value instead of leaking `/tf` into args[0]. */
+  globalFlags?: Record<string, readonly string[]>;
 }
 
 /** True iff every char after the leading dash is an ASCII letter. Only
@@ -409,7 +432,33 @@ const GLOBAL_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
 
 const EMPTY_VALUE_FLAGS: ReadonlySet<string> = new Set();
 
-export function resolveFlags(call: CallExprNode): ResolvedCall | null {
+/** Strip path prefix to basename for table lookup. `/usr/bin/git` → `git`,
+ *  `./bin/docker` → `docker`, `git` → `git`. Used only for the
+ *  GLOBAL_VALUE_FLAGS / opts.globalFlags lookup — the original literal
+ *  is preserved on ResolvedCall.cmd. */
+function basenameForLookup(s: string): string {
+  const slash = s.lastIndexOf("/");
+  return slash === -1 ? s : s.slice(slash + 1);
+}
+
+/** Build the per-call merged value-flag set: built-in table for the tool's
+ *  basename, plus any consumer-provided opts.globalFlags entry. */
+function mergedValueFlags(
+  toolBasename: string,
+  opts?: ResolveFlagsOptions
+): ReadonlySet<string> {
+  const builtin = GLOBAL_VALUE_FLAGS[toolBasename];
+  const extra = opts?.globalFlags?.[toolBasename];
+  if (!builtin && !extra) return EMPTY_VALUE_FLAGS;
+  if (!extra) return builtin ?? EMPTY_VALUE_FLAGS;
+  if (!builtin) return new Set(extra);
+  return new Set([...builtin, ...extra]);
+}
+
+export function resolveFlags(
+  call: CallExprNode,
+  opts?: ResolveFlagsOptions
+): ResolvedCall | null {
   if (call.args.length === 0) return null;
 
   const firstArg = call.args[0];
@@ -417,11 +466,22 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
   const firstLit = wordToLit(firstArg);
   if (firstLit === null) return null;
 
-  const valueFlags = GLOBAL_VALUE_FLAGS[firstLit] ?? EMPTY_VALUE_FLAGS;
+  const toolBasename = basenameForLookup(firstLit);
+  const valueFlags = mergedValueFlags(toolBasename, opts);
 
   const flags: string[] = [];
   const args: ResolvedArg[] = [];
+  const flagValues: Record<string, ResolvedArg[]> = {};
   let endOfFlags = false;
+
+  const pushFlagValue = (flagName: string, value: ResolvedArg): void => {
+    const existing = flagValues[flagName];
+    if (existing) {
+      existing.push(value);
+    } else {
+      flagValues[flagName] = [value];
+    }
+  };
 
   // Index loop (not for-of) so a value-taking global flag can consume
   // the following token as its value by advancing i.
@@ -449,14 +509,28 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
     // POSIX convention: a bare `-` is a positional (stdin sentinel),
     // not a flag.
     if (!endOfFlags && lit.startsWith("-") && lit !== "-") {
-      // Value-taking global flag for this tool: consume the next token
-      // as the flag's value (whether literal or dynamic). The value is
-      // silently dropped from `args` — it is not a positional.
+      // Space form: -C /tmp — consume the next token as the value.
       if (valueFlags.has(lit)) {
         flags.push(lit);
-        if (i + 1 < rest.length) i++;
+        const next = rest[i + 1];
+        if (next !== undefined) {
+          const nextLit = wordToLit(next);
+          pushFlagValue(lit, nextLit === null ? DYNAMIC : nextLit);
+          i++;
+        }
         i++;
         continue;
+      }
+      // = form: --git-dir=/repo — token is one piece; flagValues splits.
+      const eq = lit.indexOf("=");
+      if (eq > 0) {
+        const flagName = lit.slice(0, eq);
+        if (valueFlags.has(flagName)) {
+          flags.push(lit); // keep the original token in flags for backward compat
+          pushFlagValue(flagName, lit.slice(eq + 1));
+          i++;
+          continue;
+        }
       }
       if (isCombinedShortFlag(lit)) {
         for (const ch of lit.slice(1)) flags.push(`-${ch}`);
@@ -469,7 +543,7 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
     i++;
   }
 
-  return { cmd: firstLit, flags, args, raw: call };
+  return { cmd: firstLit, flags, flagValues, args, raw: call };
 }
 
 // Avoid an unused-import warning for SglQuoted; it's used only in the

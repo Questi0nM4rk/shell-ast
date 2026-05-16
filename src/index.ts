@@ -41,11 +41,14 @@ export {
   isResolved,
   type ResolvedArg,
   type ResolvedCall,
+  type ResolveFlagsOptions,
   resolveFlags,
   unescapeAnsiC,
   wordToLit,
   wordToParts,
 } from "./flags.js";
+
+import type { ResolveFlagsOptions } from "./flags.js";
 
 // ─── semantic.ts — discriminated UnwrappedCall ───────────────────────────────
 
@@ -59,6 +62,18 @@ export { unwrapCall } from "./semantic.js";
 // ─── Effects API ─────────────────────────────────────────────────────────────
 
 export { type Effect, effectOf, effectsOf } from "./effects.js";
+
+// ─── query.ts — zero-config CallExpr query helpers (v0.5.0) ──────────────────
+
+export {
+  flagsMatching,
+  hasFlag,
+  indexOfFlag,
+  resolvedCmd,
+  tokenAfter,
+  tokenAt,
+  tokensAfter,
+} from "./query.js";
 
 // ─── ParseError hierarchy (BUG-009) ──────────────────────────────────────────
 
@@ -221,6 +236,9 @@ export async function preloadWasm(): Promise<void> {
  *    for (const inner of findCalls(u.innerAst!)) { ... }
  *  }
  *  ``` */
-export function unwrapCallParsed(call: CallExprNode): Promise<UnwrappedCall | null> {
-  return _unwrapCallParsedInternal(call, parse);
+export function unwrapCallParsed(
+  call: CallExprNode,
+  opts?: ResolveFlagsOptions
+): Promise<UnwrappedCall | null> {
+  return _unwrapCallParsedInternal(call, parse, opts);
 }

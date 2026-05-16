@@ -40,7 +40,9 @@ npm install @questi0nm4rk/shell-ast
 
 Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node ≥ 18, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
 
-> **What's new in 0.4.0** ([changelog](./docs/MIGRATION-v0.4.0.md)) — `resolveFlags` now understands per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). `git -C /tmp worktree add` now leaves `args[0] === "worktree"` instead of leaking `/tmp` — closes [BUG-000](./docs/BUGS.md). Behavior change for consumers parsing those tools; details and migration in the linked doc.
+> **What's new in 0.5.0** — toolkit primitives for writing per-command rules. New zero-config query helpers (`tokenAfter`, `hasFlag`, `tokensAfter`, `tokenAt`, `indexOfFlag`, `flagsMatching`, `resolvedCmd`), new `flagValues` field on `ResolvedCall` preserving consumed value-flag values, optional `globalFlags` on `resolveFlags(call, opts?)` and `unwrapCall(call, opts?)` so consumers can register their own value-taking flags per-call, basename match for path-shaped tool names (`/usr/bin/git`), and `findRedirects(ast, {depth: "top"})` parity with `findCalls`.
+>
+> **What's new in 0.4.0** ([changelog](./docs/MIGRATION-v0.4.0.md)) — per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). Closes [BUG-000](./docs/BUGS.md).
 >
 > **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples for the v0.3.0 discriminated-union change.
 
@@ -67,7 +69,11 @@ $(rm -rf /)                 # CmdSubst: nested calls
 ## Highlights
 
 - **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`.
-- **Per-tool global value-flag tables** *(new in 0.4.0)* — `git -C /tmp worktree add` parses with `args: ["worktree", "add"]`, not `args: ["/tmp", "worktree", "add"]`. Covers `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / wrapper unwrapping inherits the table on the inner call automatically. Closes [BUG-000](./docs/BUGS.md).
+- **Per-tool global value-flag tables** *(0.4.0)* — `git -C /tmp worktree add` parses with `args: ["worktree", "add"]`, not `args: ["/tmp", "worktree", "add"]`. Covers `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / wrapper unwrapping inherits the table on the inner call automatically. Closes [BUG-000](./docs/BUGS.md).
+- **Zero-config query helpers** *(new in 0.5.0)* — `tokenAfter(call, "-o")`, `hasFlag(call, "-r")`, `tokensAfter(call, "-c")`, `tokenAt(call, i)`, `indexOfFlag(call, "-C")`, `flagsMatching(call, predicate)`, `resolvedCmd(call)`. Both space form and `=` form handled. The toolkit primitives for hook-kit-style rule authors.
+- **`flagValues` on `ResolvedCall`** *(new in 0.5.0)* — captured values for every value-taking flag the resolver recognized, indexed by flag name. Both `--git-dir=/repo` and `--git-dir /repo` populate the same key; repeated flags appear in order.
+- **Pluggable `globalFlags`** *(new in 0.5.0)* — `resolveFlags(call, { globalFlags: { terraform: ["-chdir"] } })`. Register your own value-taking flags per-call, merged with the built-in table. No module state.
+- **Basename match** *(new in 0.5.0)* — `/usr/bin/git`, `./bin/docker` now hit the right table row. Original path preserved on `cmd`.
 - **`DYNAMIC` symbol sentinel** — distinguishes statically-resolvable args from `$variable` / `$(…)` substitutions. Type guards (`isResolved`, `isDynamic`) survive bundler regressions that would silently turn a sentinel into the literal string `"<dynamic>"`.
 - **`wordToParts(w)`** — never null; returns `{kind: "literal" | "dynamic", value/sourceText}` fragments. See the partial structure of `rm $DANGER /tmp` instead of getting back `null`.
 - **Typed errors** — `ParseSyntaxError` / `ParseSizeError` / `WasmLoadError` / `WasmRuntimeError` with `.kind` discriminator. Catch sites distinguish "user input malformed" from "infra broken."
@@ -147,6 +153,59 @@ import { preloadWasm } from "@questi0nm4rk/shell-ast";
 await preloadWasm(); // idempotent; the first parse() is now instant
 ```
 
+### Per-command rules — toolkit primitives (0.5.0)
+
+shell-ast's defaults are intentionally tool-agnostic. For per-tool nuance, compose the zero-config query helpers in your consumer.
+
+```typescript
+// hook-kit-style: "gcc -o must write to /tmp/"
+import { findCalls, resolvedCmd, tokenAfter, parse } from "@questi0nm4rk/shell-ast";
+
+const ast = await parse("gcc -o /etc/x.out main.c");
+for (const call of findCalls(ast)) {
+  if (resolvedCmd(call) !== "gcc") continue;
+  const out = tokenAfter(call, "-o");
+  if (typeof out === "string" && !out.startsWith("/tmp/"))
+    console.warn(`gcc -o ${out} writes outside /tmp`);
+}
+```
+
+```typescript
+// dd's if=/of= syntax — no `-` prefix, no space-separated value
+import { findCalls, resolvedCmd, flagsMatching, parse } from "@questi0nm4rk/shell-ast";
+
+for (const call of findCalls(await parse(input))) {
+  if (resolvedCmd(call) !== "dd") continue;
+  const writes = flagsMatching(call, (f) => f.startsWith("of=")).map((f) => f.slice(3));
+  if (writes.some((t) => !t.startsWith("./"))) deny(`dd of= outside workspace`);
+}
+```
+
+```typescript
+// Register an unknown tool's value-flags per-call
+import { findCalls, resolveFlags, parse } from "@questi0nm4rk/shell-ast";
+
+const ast = await parse("terraform -chdir /tf apply");
+for (const call of findCalls(ast)) {
+  const r = resolveFlags(call, { globalFlags: { terraform: ["-chdir", "-state"] } });
+  // r.flagValues = { "-chdir": ["/tf"] }
+  // r.args = ["apply"]
+}
+```
+
+```typescript
+// Native chains work — every extractor returns a real Array
+import { findCalls, resolvedCmd, tokenAfter, parse } from "@questi0nm4rk/shell-ast";
+
+const ast = await parse(input);
+const violations = findCalls(ast)
+  .filter((c) => resolvedCmd(c) === "gcc")
+  .map((c) => tokenAfter(c, "-o"))
+  .filter((o): o is string => typeof o === "string" && !o.startsWith("/tmp/"));
+```
+
+`tokenAfter` handles both `--git-dir /repo` and `--git-dir=/repo` forms internally — the consumer asks for `"--git-dir"` once and gets the value either way.
+
 ---
 
 ## Architecture
@@ -192,7 +251,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Quality bar
 
-- **184 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
+- **245 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
 - **Two regression smokes** baked into CI — compiled-binary deployment ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)), consumer install from-elsewhere ([BUG-001](./docs/BUGS.md))
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `node:child_process` / `worker_threads` / `node:worker_threads` / `node:vm` / `execSync` / `spawnSync` / `Bun.spawn` / `Deno.run` / `Deno.Command` and fails the build on any match. The library parses shell strings; the test suite must never run them.
 - **Dependabot-tracked** for Go, npm, and GitHub Actions ecosystems
@@ -213,6 +272,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Docs
 
+- [**docs/plans/v0.5.0.md**](./docs/plans/v0.5.0.md) — what was added in 0.5.0 and why (toolkit primitives, no per-tool semantics in shell-ast)
 - [**docs/MIGRATION-v0.4.0.md**](./docs/MIGRATION-v0.4.0.md) — what changed in 0.4.0 (per-tool global flag tables) and how to update consumer code
 - [**docs/MIGRATION-v0.3.0.md**](./docs/MIGRATION-v0.3.0.md) — search-and-replace cheatsheet + per-API examples for v0.2.x consumers
 - [**docs/BUGS.md**](./docs/BUGS.md) — consumer-pain log; each entry cites the consumer file:line where friction shows up
@@ -230,7 +290,7 @@ git clone https://github.com/Questi0nM4rk/shell-ast
 cd shell-ast
 bun install
 bun run build      # build wasm + bundle ts
-bun test           # 184 TypeScript tests
+bun test           # 245 TypeScript tests
 go test ./processor/...    # 52 Go tests + 44-case schema lock
 ```
 
