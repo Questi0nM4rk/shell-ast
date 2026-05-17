@@ -32,8 +32,18 @@ src/
   flags.ts          DYNAMIC sentinel, wordToParts, wordToLit, resolveFlags
                     + GLOBAL_VALUE_FLAGS table (6 tools) + ResolveFlagsOptions
                     + ResolvedCall.flagValues
-  semantic.ts       UnwrappedCall discriminated union + unwrapCall + WRAPPERS table
-                    (17 wrappers: sudo/doas/pkexec/shells/eval/exec/…)
+  semantic.ts       back-compat barrel — re-exports from ./wrappers/index.js
+                    (existing `from "./semantic.js"` and the `./semantic`
+                    subpath export both keep working)
+  wrappers/
+    registry.ts     WrapperSchema + WRAPPERS table (17 wrappers:
+                    sudo/doas/pkexec/shells/eval/exec/…)
+    types.ts        UnwrappedCall discriminated union (plain / wrapped /
+                    wrapped-script / wrapped-opaque) — wrapped variant
+                    carries flagValues + innerRaw since 0.6.0
+    unwrap.ts       unwrapCall + internal unwrapPositionalScript
+    unwrap-async.ts unwrapCallParsed (populates wrapped-script innerAst)
+    index.ts        barrel re-export
   extract.ts        findCalls / findRedirects / findAssignments / findFunctions
                     + depth + ops filters
   effects.ts        Effect union (13 kinds) + effectOf + effectsOf
@@ -128,6 +138,7 @@ For non-trivial features (anything beyond a one-line fix), the working pattern i
 | [`docs/MIGRATION-v0.3.0.md`](./docs/MIGRATION-v0.3.0.md) | v0.2.x → v0.3.0 (discriminated UnwrappedCall) |
 | [`docs/MIGRATION-v0.4.0.md`](./docs/MIGRATION-v0.4.0.md) | v0.3.x → v0.4.0 (per-tool global value-flag tables) |
 | [`docs/plans/v0.5.0.md`](./docs/plans/v0.5.0.md) | v0.5.0 plan + locked decisions (toolkit primitives) |
+| [`docs/plans/v0.6.0.md`](./docs/plans/v0.6.0.md) | v0.6.0 plan + locked decisions (flagValues + innerRaw on UnwrappedCall, polymorphic query helpers, semantic.ts → wrappers/ split) |
 | `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/MEMORY.md` | Always-loaded session memory index |
 
 ## Memory entries (load-bearing)
