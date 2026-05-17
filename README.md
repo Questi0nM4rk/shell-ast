@@ -40,6 +40,8 @@ npm install @questi0nm4rk/shell-ast
 
 Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node ≥ 18, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
 
+> **What's new in 0.6.0** ([plan](./docs/plans/v0.6.0.md)) — `unwrapCall` is now the complete primary lens. `flagValues` and `innerRaw` land on `UnwrappedCall.wrapped`, so the inner call's value-flags and the synthetic inner `CallExprNode` are reachable directly from `u` instead of via `u.raw` walks or re-running `resolveFlags`. Query helpers (`tokenAfter`, `hasFlag`, `flagsMatching`, …) accept `UnwrappedCall` and dispatch to the inner call automatically. See [IDEOLOGY §11](./docs/IDEOLOGY.md) for the principle this closes. Closes [#9](https://github.com/Questi0nM4rk/shell-ast/issues/9).
+>
 > **What's new in 0.5.0** — toolkit primitives for writing per-command rules. New zero-config query helpers (`tokenAfter`, `hasFlag`, `tokensAfter`, `tokenAt`, `indexOfFlag`, `flagsMatching`, `resolvedCmd`), new `flagValues` field on `ResolvedCall` preserving consumed value-flag values, optional `globalFlags` on `resolveFlags(call, opts?)` and `unwrapCall(call, opts?)` so consumers can register their own value-taking flags per-call, basename match for path-shaped tool names (`/usr/bin/git`), and `findRedirects(ast, {depth: "top"})` parity with `findCalls`.
 >
 > **What's new in 0.4.0** ([changelog](./docs/MIGRATION-v0.4.0.md)) — per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). Closes [BUG-000](./docs/BUGS.md).
@@ -68,7 +70,8 @@ $(rm -rf /)                 # CmdSubst: nested calls
 
 ## Highlights
 
-- **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`.
+- **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`. In 0.6.0, `wrapped` also carries `flagValues` (inner-call's value-flag map) and `innerRaw` (the synthetic inner `CallExprNode`), so wrapper-aware rules don't fall back to `u.raw` walks.
+- **Polymorphic query helpers** *(0.6.0)* — every helper accepts `CallExprNode | UnwrappedCall`. For `wrapped`, it dispatches to the inner call automatically: `tokenAfter(u, "-o")` returns the inner `gcc -o` value even when wrapped in `sudo gcc`. Wrapper-side queries stay reachable via explicit `tokenAfter(u.raw, "-u")`.
 - **Per-tool global value-flag tables** *(0.4.0)* — `git -C /tmp worktree add` parses with `args: ["worktree", "add"]`, not `args: ["/tmp", "worktree", "add"]`. Covers `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / wrapper unwrapping inherits the table on the inner call automatically. Closes [BUG-000](./docs/BUGS.md).
 - **Zero-config query helpers** *(new in 0.5.0)* — `tokenAfter(call, "-o")`, `hasFlag(call, "-r")`, `tokensAfter(call, "-c")`, `tokenAt(call, i)`, `indexOfFlag(call, "-C")`, `flagsMatching(call, predicate)`, `resolvedCmd(call)`. Both space form and `=` form handled. The toolkit primitives for hook-kit-style rule authors.
 - **`flagValues` on `ResolvedCall`** *(new in 0.5.0)* — captured values for every value-taking flag the resolver recognized, indexed by flag name. Both `--git-dir=/repo` and `--git-dir /repo` populate the same key; repeated flags appear in order.
@@ -153,18 +156,22 @@ import { preloadWasm } from "@questi0nm4rk/shell-ast";
 await preloadWasm(); // idempotent; the first parse() is now instant
 ```
 
-### Per-command rules — toolkit primitives (0.5.0)
+### Per-command rules — primary lens (0.6.0)
 
-shell-ast's defaults are intentionally tool-agnostic. For per-tool nuance, compose the zero-config query helpers in your consumer.
+shell-ast's defaults are intentionally tool-agnostic. For per-tool nuance, compose the zero-config query helpers against the `UnwrappedCall` directly. The polymorphic helpers handle the sudo/bash/etc. unwrap for you — for `wrapped` variants, every query targets the **inner** call.
 
 ```typescript
-// hook-kit-style: "gcc -o must write to /tmp/"
-import { findCalls, resolvedCmd, tokenAfter, parse } from "@questi0nm4rk/shell-ast";
+// "gcc -o must write to /tmp/" — works for plain gcc AND sudo gcc
+import { findCalls, parse, tokenAfter, unwrapCall } from "@questi0nm4rk/shell-ast";
 
-const ast = await parse("gcc -o /etc/x.out main.c");
+const ast = await parse("sudo gcc -o /etc/x.out main.c");
 for (const call of findCalls(ast)) {
-  if (resolvedCmd(call) !== "gcc") continue;
-  const out = tokenAfter(call, "-o");
+  const u = unwrapCall(call);
+  if (u?.kind !== "plain" && u?.kind !== "wrapped") continue;
+  if (u.cmd !== "gcc") continue;
+  // u.flagValues works when -o is in the global table (or opts.globalFlags);
+  // tokenAfter(u, "-o") is the zero-config fallback. Both target the inner call.
+  const out = u.flagValues["-o"]?.[0] ?? tokenAfter(u, "-o");
   if (typeof out === "string" && !out.startsWith("/tmp/"))
     console.warn(`gcc -o ${out} writes outside /tmp`);
 }
@@ -172,39 +179,44 @@ for (const call of findCalls(ast)) {
 
 ```typescript
 // dd's if=/of= syntax — no `-` prefix, no space-separated value
-import { findCalls, resolvedCmd, flagsMatching, parse } from "@questi0nm4rk/shell-ast";
+import { findCalls, flagsMatching, parse, unwrapCall } from "@questi0nm4rk/shell-ast";
 
 for (const call of findCalls(await parse(input))) {
-  if (resolvedCmd(call) !== "dd") continue;
-  const writes = flagsMatching(call, (f) => f.startsWith("of=")).map((f) => f.slice(3));
+  const u = unwrapCall(call);
+  if (u?.kind !== "plain" && u?.kind !== "wrapped") continue;
+  if (u.cmd !== "dd") continue;
+  const writes = flagsMatching(u, (f) => f.startsWith("of=")).map((f) => f.slice(3));
   if (writes.some((t) => !t.startsWith("./"))) deny(`dd of= outside workspace`);
 }
 ```
 
 ```typescript
-// Register an unknown tool's value-flags per-call
-import { findCalls, resolveFlags, parse } from "@questi0nm4rk/shell-ast";
+// Register an unknown tool's value-flags per-call — opts threads through unwrap
+import { findCalls, parse, unwrapCall } from "@questi0nm4rk/shell-ast";
 
-const ast = await parse("terraform -chdir /tf apply");
+const ast = await parse("sudo terraform -chdir /tf apply");
 for (const call of findCalls(ast)) {
-  const r = resolveFlags(call, { globalFlags: { terraform: ["-chdir", "-state"] } });
-  // r.flagValues = { "-chdir": ["/tf"] }
-  // r.args = ["apply"]
+  const u = unwrapCall(call, { globalFlags: { terraform: ["-chdir", "-state"] } });
+  if (u?.kind !== "wrapped") continue;
+  // u.flagValues = { "-chdir": ["/tf"] }  ← inner terraform's, NOT outer sudo's
+  // u.args = ["apply"]
 }
 ```
 
 ```typescript
 // Native chains work — every extractor returns a real Array
-import { findCalls, resolvedCmd, tokenAfter, parse } from "@questi0nm4rk/shell-ast";
+import { findCalls, parse, tokenAfter, unwrapCall } from "@questi0nm4rk/shell-ast";
 
 const ast = await parse(input);
 const violations = findCalls(ast)
-  .filter((c) => resolvedCmd(c) === "gcc")
-  .map((c) => tokenAfter(c, "-o"))
+  .map((c) => unwrapCall(c))
+  .filter((u): u is NonNullable<typeof u> => u?.kind === "plain" || u?.kind === "wrapped")
+  .filter((u) => u.cmd === "gcc")
+  .map((u) => tokenAfter(u, "-o"))
   .filter((o): o is string => typeof o === "string" && !o.startsWith("/tmp/"));
 ```
 
-`tokenAfter` handles both `--git-dir /repo` and `--git-dir=/repo` forms internally — the consumer asks for `"--git-dir"` once and gets the value either way.
+`tokenAfter` handles both `--git-dir /repo` and `--git-dir=/repo` forms internally. For wrapper-side queries (e.g. "did sudo escalate to root?"), pass `u.raw` explicitly: `tokenAfter(u.raw, "-u")`.
 
 ---
 

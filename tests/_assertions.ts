@@ -12,7 +12,7 @@
 
 import { expect, test } from "bun:test";
 import type { ResolvedArg } from "../src/index.js";
-import { findCalls, parse, resolveFlags } from "../src/index.js";
+import { findCalls, parse, resolveFlags, wordToLit } from "../src/index.js";
 import type { UnwrappedCall } from "../src/semantic.js";
 import { unwrapCall } from "../src/semantic.js";
 
@@ -35,6 +35,15 @@ export interface ExpectedCmd {
   // ─── Field-level assertions (any kind) ───────────────────────────
   flags?: string[];
   args?: ResolvedArg[];
+  /** Deep-equal assertion on `u.flagValues` (plain / wrapped variants
+   *  only — fails the test if the resolved kind doesn't carry it). */
+  flagValues?: Record<string, ResolvedArg[]>;
+  /** Presence + shape assertion on `u.innerRaw` (wrapped variant only).
+   *  `cmdLit` asserts the literal of `innerRaw.args[0]`. `flagsLit`
+   *  asserts the literal-resolved flag-shaped tokens (anything starting
+   *  with `-` after the cmd). Either sub-field undefined skips that
+   *  check; the field's presence alone asserts innerRaw exists. */
+  innerRaw?: { cmdLit?: string; flagsLit?: string[] };
   /** Exact length of calls[0].assigns (for FOO=bar cmd patterns). */
   assignsCount?: number;
 
@@ -143,6 +152,36 @@ export function testCmd(src: string, expected: ExpectedCmd): void {
     }
     if (expected.assignsCount !== undefined) {
       expect(first?.assigns.length).toBe(expected.assignsCount);
+    }
+    if (expected.flagValues !== undefined) {
+      if (u?.kind !== "plain" && u?.kind !== "wrapped") {
+        throw new Error(
+          `flagValues assertion only valid on plain / wrapped variants — got ${u?.kind ?? "null"} for ${src}`
+        );
+      }
+      expect(u.flagValues).toEqual(expected.flagValues);
+    }
+    if (expected.innerRaw !== undefined) {
+      if (u?.kind !== "wrapped") {
+        throw new Error(
+          `innerRaw assertion only valid on wrapped variant — got ${u?.kind ?? "null"} for ${src}`
+        );
+      }
+      expect(u.innerRaw.type).toBe("CallExpr");
+      if (expected.innerRaw.cmdLit !== undefined) {
+        const head = u.innerRaw.args[0];
+        const lit = head ? wordToLit(head) : null;
+        expect(lit).toBe(expected.innerRaw.cmdLit);
+      }
+      if (expected.innerRaw.flagsLit !== undefined) {
+        const tail = u.innerRaw.args.slice(1);
+        const flagTokens: string[] = [];
+        for (const w of tail) {
+          const lit = wordToLit(w);
+          if (lit?.startsWith("-")) flagTokens.push(lit);
+        }
+        expect(flagTokens).toEqual(expected.innerRaw.flagsLit);
+      }
     }
   });
 }

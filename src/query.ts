@@ -1,9 +1,22 @@
-// Zero-configuration query helpers for inspecting a CallExprNode.
+// Zero-configuration query helpers for inspecting a CallExpr.
 //
-// All helpers operate on a raw CallExpr (the result of `findCalls`),
-// and none of them require `resolveFlags` to be called first. They are
-// the "give me one piece of info about this call" primitives that
-// consumers (hook-kit, ai-guardrails) compose into rules.
+// Every helper accepts EITHER a raw `CallExprNode` (the result of
+// `findCalls`) OR an `UnwrappedCall` (the result of `unwrapCall`). For
+// `UnwrappedCall.wrapped`, dispatch targets the INNER call automatically
+// — the v0.6.0 primary-lens-completeness contract (see IDEOLOGY §11).
+//
+// Dispatch rule:
+//   - CallExprNode             → query directly
+//   - UnwrappedCall.plain      → query u.raw (which IS the plain call)
+//   - UnwrappedCall.wrapped    → query u.innerRaw (the inner cmd)
+//   - UnwrappedCall.wrapped-script / wrapped-opaque
+//                              → query u.raw (the wrapper's call —
+//                                 inner queries don't apply: parse
+//                                 u.script via unwrapCallParsed for
+//                                 wrapped-script; opaque has no inner)
+//
+// For explicit wrapper-side queries on a wrapped call, pass `u.raw`:
+//   tokenAfter(u.raw, "-u")  // sudo's -u value, not inner cmd's
 //
 // Per-tool knowledge does NOT live here. These helpers don't know
 // "gcc -o means output" — they just know "find the token after -o".
@@ -16,12 +29,21 @@
 //   - indexOfFlag: returns the index of the containing token in either form
 //   - flagsMatching: filters raw literal tokens (no form rewriting)
 //
-// All helpers return ResolvedArg (string | DYNAMIC) or undefined. Dynamic
-// values surface as DYNAMIC; consumers decide whether to deny-by-default
-// or inspect via wordToParts.
+// All helpers return ResolvedArg (string | DYNAMIC) or undefined.
 
 import { DYNAMIC, type ResolvedArg, wordToLit } from "./flags.js";
 import type { CallExprNode } from "./types.js";
+import type { UnwrappedCall } from "./wrappers/index.js";
+
+/** Dispatch: for `wrapped` variants return the inner synthetic call;
+ *  for everything else return the outer / direct call. Tiny, fully
+ *  typed, no allocation. */
+function callOf(target: CallExprNode | UnwrappedCall): CallExprNode {
+  if ("kind" in target) {
+    return target.kind === "wrapped" ? target.innerRaw : target.raw;
+  }
+  return target;
+}
 
 /** Pure-ASCII-letter sequence after the leading dash. Matches the same
  *  rule resolveFlags uses for combined short flags. */
@@ -44,31 +66,34 @@ function tokenContainsFlag(lit: string, flag: string): boolean {
     return lit.startsWith(`${flag}=`);
   }
   if (flag.startsWith("-") && flag.length === 2) {
-    // Short flag like "-r" — check inside a combined short flag
     if (isCombinedShortFlag(lit) && lit.includes(flag.charAt(1))) return true;
   }
   return false;
 }
 
-/** First value following `flag` in `call.args`, handling both space form
- *  (`-C /tmp`) and joined `=` form (`--git-dir=/repo`).
+/** First value following `flag` in `target.args`, handling both space
+ *  form (`-C /tmp`) and joined `=` form (`--git-dir=/repo`).
  *
  *  Returns the value token (resolved literal or DYNAMIC), or `undefined`
  *  when the flag is absent, has no following token (end-of-args), or
  *  only appears inside a combined-short group like `-rf` (strict literal
- *  match avoids ambiguity for short flags). */
-export function tokenAfter(call: CallExprNode, flag: string): ResolvedArg | undefined {
+ *  match avoids ambiguity for short flags).
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, queries the INNER call. */
+export function tokenAfter(
+  target: CallExprNode | UnwrappedCall,
+  flag: string
+): ResolvedArg | undefined {
+  const call = callOf(target);
   const rest = call.args.slice(1);
   for (let i = 0; i < rest.length; i++) {
     const word = rest[i];
     if (!word) continue;
     const lit = wordToLit(word);
     if (lit === null) continue;
-    // Joined = form: --git-dir=/repo → return /repo
     if (flag.startsWith("--") && lit.startsWith(`${flag}=`)) {
       return lit.slice(flag.length + 1);
     }
-    // Literal token: next word is the value
     if (lit === flag) {
       const next = rest[i + 1];
       if (next === undefined) return undefined;
@@ -79,10 +104,16 @@ export function tokenAfter(call: CallExprNode, flag: string): ResolvedArg | unde
   return undefined;
 }
 
-/** Values following EVERY occurrence of `flag` — one entry per occurrence.
- *  Same matching rules as `tokenAfter`. Useful for repeated value-flags
- *  like `git -c k1=v1 -c k2=v2`. */
-export function tokensAfter(call: CallExprNode, flag: string): ResolvedArg[] {
+/** Values following EVERY occurrence of `flag` — one entry per
+ *  occurrence. Same matching rules as `tokenAfter`. Useful for repeated
+ *  value-flags like `git -c k1=v1 -c k2=v2`.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, queries the INNER call. */
+export function tokensAfter(
+  target: CallExprNode | UnwrappedCall,
+  flag: string
+): ResolvedArg[] {
+  const call = callOf(target);
   const out: ResolvedArg[] = [];
   const rest = call.args.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -110,8 +141,11 @@ export function tokensAfter(call: CallExprNode, flag: string): ResolvedArg[] {
  *
  *  This is the "does this command use this option, in any form?"
  *  question. For strict-literal "appears as its own token", use
- *  `resolveFlags(call).flags.includes(flag)`. */
-export function hasFlag(call: CallExprNode, flag: string): boolean {
+ *  `resolveFlags(call).flags.includes(flag)`.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, queries the INNER call. */
+export function hasFlag(target: CallExprNode | UnwrappedCall, flag: string): boolean {
+  const call = callOf(target);
   for (const word of call.args.slice(1)) {
     if (!word) continue;
     const lit = wordToLit(word);
@@ -126,8 +160,14 @@ export function hasFlag(call: CallExprNode, flag: string): boolean {
  *  position, so `gcc -rf out.txt` returns 1 for both `-r` and `-f` (both
  *  live inside the `-rf` token at index 1).
  *
- *  Returns `undefined` when not found. */
-export function indexOfFlag(call: CallExprNode, flag: string): number | undefined {
+ *  Returns `undefined` when not found.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, queries the INNER call. */
+export function indexOfFlag(
+  target: CallExprNode | UnwrappedCall,
+  flag: string
+): number | undefined {
+  const call = callOf(target);
   for (let i = 1; i < call.args.length; i++) {
     const word = call.args[i];
     if (!word) continue;
@@ -143,8 +183,15 @@ export function indexOfFlag(call: CallExprNode, flag: string): number | undefine
  *
  *  Note: `tokenAt(call, 0)` is the COMMAND itself (`call.args[0]`),
  *  matching the underlying AST shape. The first arg-after-cmd is at
- *  index 1. */
-export function tokenAt(call: CallExprNode, i: number): ResolvedArg | undefined {
+ *  index 1.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, indexes into the INNER
+ *  call's args. */
+export function tokenAt(
+  target: CallExprNode | UnwrappedCall,
+  i: number
+): ResolvedArg | undefined {
+  const call = callOf(target);
   if (i < 0 || i >= call.args.length) return undefined;
   const word = call.args[i];
   if (!word) return undefined;
@@ -158,11 +205,15 @@ export function tokenAt(call: CallExprNode, i: number): ResolvedArg | undefined 
  *
  *  Use this for non-standard flag syntaxes that `resolveFlags` does not
  *  recognize: dd's `if=/of=` form, awk's `-F`-style, anything you want
- *  to match by substring. */
+ *  to match by substring.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, filters the INNER call's
+ *  tokens. */
 export function flagsMatching(
-  call: CallExprNode,
+  target: CallExprNode | UnwrappedCall,
   predicate: (token: string) => boolean
 ): string[] {
+  const call = callOf(target);
   const out: string[] = [];
   for (const word of call.args.slice(1)) {
     if (!word) continue;
@@ -183,8 +234,12 @@ export function flagsMatching(
  *
  *  Edge case: a literal trailing-slash path (`/bin/`) returns the empty
  *  string. Realistic inputs never look like this; documenting for
- *  completeness. */
-export function resolvedCmd(call: CallExprNode): string | undefined {
+ *  completeness.
+ *
+ *  Polymorphic: for `UnwrappedCall.wrapped`, returns the INNER call's
+ *  basename. */
+export function resolvedCmd(target: CallExprNode | UnwrappedCall): string | undefined {
+  const call = callOf(target);
   const first = call.args[0];
   if (!first) return undefined;
   const lit = wordToLit(first);

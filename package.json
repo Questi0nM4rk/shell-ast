@@ -1,6 +1,6 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Full typed AST for bash / posix / mksh + zero-config query primitives for command-level security tools. mvdan/sh compiled to WASM, exposed as TypeScript discriminated unions with sudo-aware wrapper unwrap, per-tool global value-flag tables, and helpers like `tokenAfter(call, '-o')` / `hasFlag(call, '-r')` for hook-kit-style rule authors.",
   "license": "MIT",
   "homepage": "https://github.com/Questi0nM4rk/shell-ast#readme",

@@ -196,11 +196,36 @@ Specific rejected ideas, preserved for future reference:
 
 ---
 
+## 11. The primary lens must be complete
+
+When a release ships an opinionated "headline API" (the path the README and CLAUDE.md push), the consumer must never need to fall through to lower-level primitives to answer questions the headline API was designed for. Falling through to `.raw` (or re-running an upstream resolver) is the escape hatch for *uncommon* questions — not for the questions the primary lens claims to answer.
+
+Concretely: shell-ast's headline path is `parse → findCalls → unwrapCall → switch (u.kind)`. Security rules naturally want to ask "what value did flag X get on the inner command?" and "is flag Y present anywhere on the inner command?". Those questions are *core to the primary lens* and must be answerable directly from the `UnwrappedCall` shape — not by reaching past it to the resolver or by re-synthesizing the inner call.
+
+This is downstream of §3 ("80/20 with escape hatches"): escape hatches exist for the 20%, not for filling holes in the 80%.
+
+### Worked failure: v0.5.0 → v0.6.0
+
+In v0.5.0 we added `flagValues` to `ResolvedCall` (the *secondary* lens — what you get from `resolveFlags(call)` directly). We did not also propagate it through `unwrapCall` to `UnwrappedCall`. Consumers wanting flagValues on a wrapper-aware lookup had to either:
+
+1. Re-run `resolveFlags(u.raw, opts)` after `unwrapCall` — wasteful, and for `wrapped` calls `u.raw` is the OUTER (sudo) call, not the inner gcc.
+2. Walk `u.raw` with query helpers — same outer-vs-inner trap; can return wrong target.
+
+That's the smell. The fix (v0.6.0) wasn't to add one named field — it was to recognize the *class* of "the inner call's information is unreachable from the primary lens" and close it: `flagValues` + `innerRaw` on `UnwrappedCall.wrapped` + polymorphic query helpers that dispatch to the inner call when given an `UnwrappedCall`.
+
+### Filter for future features
+
+Before shipping a new piece of derived information, ask: *can the consumer reach this through the primary lens without falling through to `.raw` or re-running the resolver?* If no, the API change isn't done. Either complete the primary-lens surface or articulate why the question doesn't belong on the primary lens.
+
+This principle does NOT mean "ship every conceivable derived view." It means "if you ship A on `ResolvedCall`, audit whether `UnwrappedCall` needs a mirror — and if so, do it in the same release."
+
+---
+
 ## Direction (snapshot — refresh as plans evolve)
 
 ### shell-ast
 
-Currently at `0.5.1`. v0.5.x is the "toolkit primitives" baseline. v0.6.0+ adds more zero-config primitives only when hook-kit hits real pain — no schemas, no roles, no per-tool default DB. See `docs/plans/v0.5.0.md` for what landed and what was explicitly deferred.
+Currently at `0.6.0`. v0.5.x was the "toolkit primitives" baseline; v0.6.0 closes the primary-lens-completeness gap (see §11) — `flagValues` + `innerRaw` on `UnwrappedCall`, polymorphic query helpers. Beyond 0.6.0, more primitives land only when hook-kit hits real pain — no schemas, no roles, no per-tool default DB. See `docs/plans/v0.5.0.md` and `docs/plans/v0.6.0.md` for what landed and what was explicitly deferred.
 
 ### hook-kit
 
@@ -227,4 +252,4 @@ Methodology + tooling plugins. Bootstrapped via `qsm-setup`. The Stop hook's `DE
 
 Cross-project decisions reference this doc by section. When proposing a change that touches scope boundaries, cite which principle applies. When a principle is wrong for a new situation, **update this doc first** — don't quietly violate it.
 
-Last updated: 2026-05-17.
+Last updated: 2026-05-18.

@@ -1,0 +1,357 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`UnwrappedCall snapshot regression plain — bare rm with combined-short 1`] = `
+{
+  "args": [
+    "/tmp/x",
+  ],
+  "cmd": "rm",
+  "flagValues": {},
+  "flags": [
+    "-r",
+    "-f",
+  ],
+  "kind": "plain",
+  "raw": {
+    "argCount": 3,
+    "headLit": "rm",
+    "type": "CallExpr",
+  },
+}
+`;
+
+exports[`UnwrappedCall snapshot regression plain — basename path resolution 1`] = `
+{
+  "args": [
+    "status",
+  ],
+  "cmd": "/usr/bin/git",
+  "flagValues": {},
+  "flags": [],
+  "kind": "plain",
+  "raw": {
+    "argCount": 2,
+    "headLit": "/usr/bin/git",
+    "type": "CallExpr",
+  },
+}
+`;
+
+exports[`UnwrappedCall snapshot regression plain — git with global value-flag 1`] = `
+{
+  "args": [
+    "worktree",
+    "add",
+    "/tmp/x",
+  ],
+  "cmd": "git",
+  "flagValues": {
+    "-C": [
+      "/tmp",
+    ],
+  },
+  "flags": [
+    "-C",
+  ],
+  "kind": "plain",
+  "raw": {
+    "argCount": 6,
+    "headLit": "git",
+    "type": "CallExpr",
+  },
+}
+`;
+
+exports[`UnwrappedCall snapshot regression plain — wrapper-named no inner (bash --version) 1`] = `
+{
+  "args": [],
+  "cmd": "bash",
+  "flagValues": {},
+  "flags": [
+    "--version",
+  ],
+  "kind": "plain",
+  "raw": {
+    "argCount": 2,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+}
+`;
+
+exports[`UnwrappedCall snapshot regression plain — wrapper-named no inner (sudo -V) 1`] = `
+{
+  "args": [],
+  "cmd": "sudo",
+  "flagValues": {},
+  "flags": [
+    "-V",
+  ],
+  "kind": "plain",
+  "raw": {
+    "argCount": 2,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — sudo + rm 1`] = `
+{
+  "args": [
+    "/tmp/x",
+  ],
+  "cmd": "rm",
+  "flagValues": {},
+  "flags": [
+    "-r",
+    "-f",
+  ],
+  "innerRaw": {
+    "argCount": 3,
+    "headLit": "rm",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 4,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+  "wrapper": "sudo",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — doas + gcc 1`] = `
+{
+  "args": [
+    "/tmp/x",
+    "src.c",
+  ],
+  "cmd": "gcc",
+  "flagValues": {},
+  "flags": [
+    "-o",
+  ],
+  "innerRaw": {
+    "argCount": 4,
+    "headLit": "gcc",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 5,
+    "headLit": "doas",
+    "type": "CallExpr",
+  },
+  "wrapper": "doas",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — sudo with -u + inner global flag 1`] = `
+{
+  "args": [
+    "status",
+  ],
+  "cmd": "git",
+  "flagValues": {
+    "-C": [
+      "/tmp",
+    ],
+  },
+  "flags": [
+    "-C",
+  ],
+  "innerRaw": {
+    "argCount": 4,
+    "headLit": "git",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 7,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+  "wrapper": "sudo",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — positionalUser (gosu) 1`] = `
+{
+  "args": [
+    "/tmp/x",
+  ],
+  "cmd": "rm",
+  "flagValues": {},
+  "flags": [],
+  "innerRaw": {
+    "argCount": 2,
+    "headLit": "rm",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 4,
+    "headLit": "gosu",
+    "type": "CallExpr",
+  },
+  "wrapper": "gosu",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — exec strip 1`] = `
+{
+  "args": [
+    "/tmp/x",
+  ],
+  "cmd": "rm",
+  "flagValues": {},
+  "flags": [
+    "-r",
+    "-f",
+  ],
+  "innerRaw": {
+    "argCount": 3,
+    "headLit": "rm",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 4,
+    "headLit": "exec",
+    "type": "CallExpr",
+  },
+  "wrapper": "exec",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped — sudo + basename-path inner 1`] = `
+{
+  "args": [
+    "status",
+  ],
+  "cmd": "/usr/bin/git",
+  "flagValues": {},
+  "flags": [],
+  "innerRaw": {
+    "argCount": 2,
+    "headLit": "/usr/bin/git",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 3,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+  "wrapper": "sudo",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-script — bash -c 1`] = `
+{
+  "args": [],
+  "flags": [
+    "-c",
+  ],
+  "innerAst": "<unparsed>",
+  "kind": "wrapped-script",
+  "raw": {
+    "argCount": 3,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+  "script": "rm -rf /tmp/x",
+  "wrapper": "bash",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-script — sh -c 1`] = `
+{
+  "args": [],
+  "flags": [
+    "-c",
+  ],
+  "innerAst": "<unparsed>",
+  "kind": "wrapped-script",
+  "raw": {
+    "argCount": 3,
+    "headLit": "sh",
+    "type": "CallExpr",
+  },
+  "script": "echo hi",
+  "wrapper": "sh",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-script — eval (commandFromArgs) 1`] = `
+{
+  "args": [],
+  "flags": [],
+  "innerAst": "<unparsed>",
+  "kind": "wrapped-script",
+  "raw": {
+    "argCount": 2,
+    "headLit": "eval",
+    "type": "CallExpr",
+  },
+  "script": "rm -rf /tmp/x",
+  "wrapper": "eval",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-script — bash -c with trailing args 1`] = `
+{
+  "args": [
+    "<DYNAMIC>",
+    "sh",
+    "arg1",
+    "arg2",
+  ],
+  "flags": [
+    "-c",
+  ],
+  "kind": "wrapped-opaque",
+  "raw": {
+    "argCount": 6,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+  "wrapper": "bash",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-opaque — sudo $cmd 1`] = `
+{
+  "args": [
+    "<DYNAMIC>",
+  ],
+  "flags": [],
+  "kind": "wrapped-opaque",
+  "raw": {
+    "argCount": 2,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+  "wrapper": "sudo",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-opaque — bash -c $script 1`] = `
+{
+  "args": [
+    "<DYNAMIC>",
+  ],
+  "flags": [
+    "-c",
+  ],
+  "kind": "wrapped-opaque",
+  "raw": {
+    "argCount": 3,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+  "wrapper": "bash",
+}
+`;
