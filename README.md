@@ -272,6 +272,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Docs
 
+- [**docs/IDEOLOGY.md**](./docs/IDEOLOGY.md) — ecosystem philosophy: where shell-ast stops, what hook-kit / ai-guardrails / feets own, what we explicitly do NOT do and why
 - [**docs/plans/v0.5.0.md**](./docs/plans/v0.5.0.md) — what was added in 0.5.0 and why (toolkit primitives, no per-tool semantics in shell-ast)
 - [**docs/MIGRATION-v0.4.0.md**](./docs/MIGRATION-v0.4.0.md) — what changed in 0.4.0 (per-tool global flag tables) and how to update consumer code
 - [**docs/MIGRATION-v0.3.0.md**](./docs/MIGRATION-v0.3.0.md) — search-and-replace cheatsheet + per-API examples for v0.2.x consumers
