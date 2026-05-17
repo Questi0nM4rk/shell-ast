@@ -101,6 +101,8 @@ describe("unwrapCall(call, opts) — opts threads through wrapper-stripped inner
     expect(u.cmd).toBe("terraform");
     expect(u.flags).toEqual(["-chdir"]);
     expect(u.args).toEqual(["apply"]);
+    // v0.6.0 parity: flagValues threaded through.
+    expect(u.flagValues).toEqual({ "-chdir": ["/tf"] });
   });
 
   test("opts has no effect on the sudo wrapper schema itself", async () => {
@@ -115,4 +117,37 @@ describe("unwrapCall(call, opts) — opts threads through wrapper-stripped inner
     expect(u.wrapper).toBe("sudo");
     expect(u.cmd).toBe("git");
   });
+});
+
+describe("flagValues parity — unwrapCall(call,opts).flagValues === resolveFlags(u.innerRaw,opts).flagValues", () => {
+  // The post-v0.6.0 path is `u.flagValues`. The pre-v0.6.0 workaround
+  // would be to grab the inner CallExpr (now exposed via u.innerRaw)
+  // and re-run resolveFlags on it. Both paths must produce identical
+  // results — drift between them would mean unwrapCall is filtering
+  // or transforming what the resolver produced.
+  const fixtures: Array<{
+    src: string;
+    opts?: Parameters<typeof unwrapCall>[1];
+  }> = [
+    { src: "sudo git -C /tmp worktree add" },
+    { src: "doas docker -H tcp://prod run nginx" },
+    { src: "sudo -u root git -c k1=v1 -C /repo status" },
+    { src: "sudo gcc -o /tmp/x src.c", opts: { globalFlags: { gcc: ["-o"] } } },
+    {
+      src: "doas terraform -chdir /tf apply",
+      opts: { globalFlags: { terraform: ["-chdir"] } },
+    },
+    { src: "sudo /usr/bin/git -C /repo status" }, // basename match through wrap
+  ];
+
+  for (const { src, opts } of fixtures) {
+    test(src, async () => {
+      const u = unwrapCall(await firstCall(src), opts);
+      expect(u?.kind).toBe("wrapped");
+      if (u?.kind !== "wrapped") return;
+      const r = resolveFlags(u.innerRaw, opts);
+      expect(r).not.toBeNull();
+      expect(u.flagValues).toEqual(r!.flagValues);
+    });
+  }
 });
