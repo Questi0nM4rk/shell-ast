@@ -36,14 +36,17 @@ src/
                     (existing `from "./semantic.js"` and the `./semantic`
                     subpath export both keep working)
   wrappers/
-    registry.ts     WrapperSchema + WRAPPERS table (17 wrappers:
-                    sudo/doas/pkexec/shells/eval/exec/…)
-    types.ts        UnwrappedCall discriminated union (plain / wrapped /
-                    wrapped-script / wrapped-opaque) — wrapped variant
-                    carries flagValues + innerRaw since 0.6.0
-    unwrap.ts       unwrapCall + internal unwrapPositionalScript
-    unwrap-async.ts unwrapCallParsed (populates wrapped-script innerAst)
-    index.ts        barrel re-export
+    registry.ts        WrapperSchema + WRAPPERS table (17 wrappers:
+                       sudo/doas/pkexec/shells/eval/exec/…)
+    types.ts           UnwrappedCall discriminated union (plain / wrapped /
+                       wrapped-script / wrapped-opaque) — wrapped variant
+                       carries flagValues + innerRaw since 0.6.0
+    unwrap.ts          unwrapCall + internal unwrapPositionalScript
+    unwrap-async.ts    unwrapCallParsed (populates wrapped-script innerAst)
+    unwrap-deep.ts     unwrapDeep — sync chain walker (since 0.7.0)
+    unwrap-deep-async.ts unwrapDeepParsed — async chain walker, re-parses
+                         wrapped-script layers (since 0.7.0)
+    index.ts           barrel re-export
   extract.ts        findCalls / findRedirects / findAssignments / findFunctions
                     + depth + ops filters
   effects.ts        Effect union (13 kinds) + effectOf + effectsOf
@@ -107,7 +110,7 @@ Read [`docs/IDEOLOGY.md`](./docs/IDEOLOGY.md) section "Where each project stops"
 - **Per-tool semantic schemas** (gcc / git / docker / kubectl) — hook-kit's job.
 - **`Role` vocabulary** (`fs-read`, `fs-write`, `fs-cwd`, …) — consumer tags whatever they want.
 - **Fluent `Query<T>` chain class** — native `Array.prototype` + Iterator Helpers cover it.
-- **`unwrapDeep` for chained wrappers** — deferred. Consumers do this with `unwrapCallParsed` + `findCalls` recursion.
+- ~~**`unwrapDeep` for chained wrappers**~~ — **SHIPPED v0.7.0** (`unwrapDeep` + `unwrapDeepParsed`). Closed [BUG-008](./docs/BUGS.md) / [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11). Postmortem of the two-release deferral is the canonical worked example for how NOT to defer features — see memory `feedback_dont_conflate_deferred_with_rejected.md` and `feedback_verify_escape_hatch_claims.md`.
 - **Default per-tool schemas beyond the current `GLOBAL_VALUE_FLAGS` 6.**
 - **Auto-publish workflow.**
 - **Anything that requires shell-ast to know what a specific tool "means."**
@@ -139,6 +142,7 @@ For non-trivial features (anything beyond a one-line fix), the working pattern i
 | [`docs/MIGRATION-v0.4.0.md`](./docs/MIGRATION-v0.4.0.md) | v0.3.x → v0.4.0 (per-tool global value-flag tables) |
 | [`docs/plans/v0.5.0.md`](./docs/plans/v0.5.0.md) | v0.5.0 plan + locked decisions (toolkit primitives) |
 | [`docs/plans/v0.6.0.md`](./docs/plans/v0.6.0.md) | v0.6.0 plan + locked decisions (flagValues + innerRaw on UnwrappedCall, polymorphic query helpers, semantic.ts → wrappers/ split) |
+| [`docs/plans/v0.7.0.md`](./docs/plans/v0.7.0.md) | v0.7.0 plan + locked decisions (unwrapDeep + unwrapDeepParsed, BUG-008 close-out, four BUG-008-postmortem lessons applied) |
 | `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/MEMORY.md` | Always-loaded session memory index |
 
 ## Memory entries (load-bearing)
@@ -150,8 +154,20 @@ Read these when in doubt — they hold the *why* that the code doesn't.
 | `feedback_sideeffects_false_breaks_wasm.md` | The 0.3.1 incident — never set `sideEffects: false` on packages with side-effect imports |
 | `feedback_verify_dist_before_publish.md` | Pre-publish ritual — grep dist + tmp consumer smoke. `bun test` isn't enough |
 | `feedback_shell_ast_is_a_toolkit.md` | shell-ast scope hard rejects (no schemas, no Roles, no LINQ chain class) |
-| `feedback_user_is_the_consumer.md` | Personal-scale ecosystem framing — don't defer features waiting for hypothetical users |
+| `feedback_user_is_the_consumer.md` | Personal-scale ecosystem framing — don't defer features waiting for hypothetical users (extended 2026-05-18 with the BUG-008 sibling-pain case study) |
 | `feedback_push_back_when_you_have_reason.md` | Working-relationship discipline — don't mirror, disagree when warranted |
+| `feedback_dont_conflate_deferred_with_rejected.md` | IDEOLOGY's "Where each project stops" must split architecturally-rejected from deferred-with-revisit-conditions. v0.7.0 refactored this. |
+| `feedback_verify_escape_hatch_claims.md` | Plan-doc deferrals citing "the existing escape hatch covers it" require a passing test in the consumer's repo. v0.6.0 plan's wrong claim about hook-kit's `recurseInlineShells` is the worked failure. |
+| `feedback_asymmetric_variant_classification.md` | When adding a wrapper or variant, test the with-wrapper-prefix shape (`sudo X`, `doas X`) alongside the bare shape. Same logical chain producing different lens shapes = primary-lens problem sibling to §11. |
 | `project_ecosystem_layering.md` | shell-ast → hook-kit → ai-guardrails → feets responsibility table |
 | `project_publish_ritual.md` | Full 9-step manual publish procedure |
 | `reference_bugs_md_ordering.md` | `docs/BUGS.md` severity-ordered, not chronological |
+
+## Plan-doc hygiene checklist (BUG-008 postmortem, 2026-05-18)
+
+Before locking a `docs/plans/v*.md` deferral decision, run through these checks. They exist because they were missed across v0.5.0 → v0.6.0 for BUG-008, and the cost was two release cycles of stalled hook-kit work plus a wrong "escape hatch covers it" claim in v0.6.0's plan that nobody verified.
+
+1. **Deferred vs rejected?** Is this feature architecturally out-of-scope (per the IDEOLOGY "Architecturally rejected" subsection), or just timing-deferred? If deferred: write the explicit revisit-condition. Don't bundle it next to actual rejects; consumers and future-you re-evaluate from that grouping.
+2. **Escape-hatch verified?** If the deferral rationale is "consumers can do this with primitive X + Y," point to a passing test in the consumer's repo that demonstrates X + Y end-to-end for the deferred case. "Should be fine" is not enough — v0.6.0 plan's "hook-kit's `recurseInlineShells` covers `sudo bash -c \"rm\"`" was wrong and carried forward unchecked.
+3. **Personal-scale vs OSS-shaped gate?** "Wait for consumer demand" / "wait for user feedback" / "wait for second consumer" / "wait for hook-kit to hit real pain" are all the same OSS-shaped reflex IDEOLOGY §6 rejects. In a sibling-ecosystem under one maintainer, the gate must be architectural ("this is the wrong layer", "the impl is too large to phase"), not demand-driven.
+4. **Asymmetric variant check?** When adding a wrapper / variant / lens shape, snapshot the with-wrapper-prefix case (`sudo X`, `doas X`, `env X`) alongside the bare case in `tests/wrapper-shapes.test.ts`. If shapes diverge in a way that forces consumer-side recursion, that's a primary-lens problem sibling to §11 — close the gap or document the asymmetry as deliberate.
