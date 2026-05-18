@@ -132,6 +132,12 @@ const cases: Array<{ name: string; src: string }> = [
   // ─── wrapped-opaque ────────────────────────────────────────────────
   { name: "wrapped-opaque — sudo $cmd", src: "sudo $CMD" },
   { name: "wrapped-opaque — bash -c $script", src: "bash -c $SCRIPT" },
+
+  // ─── chained wrapper (per lesson L4: asymmetric variant classification) ─
+  // sudo bash -c '…' is the canonical case where bare `bash -c` is
+  // wrapped-script but adding sudo makes it wrapped-with-bash-inner.
+  // Snapshot the outer layer; the chain is exercised by unwrap-deep.test.ts.
+  { name: "chained — sudo bash -c '...'", src: "sudo bash -c 'rm -rf /tmp/x'" },
 ];
 
 describe("UnwrappedCall snapshot regression", () => {

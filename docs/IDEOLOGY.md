@@ -182,17 +182,24 @@ What goes in **code comments**:
 
 ## Where each project stops
 
-The most common scope-violation pattern is "shell-ast should know about [tool]" or "hook-kit should ship default rules for [scenario]." The answer is almost always **no**, and the reason is in this doc.
+The most common scope-violation pattern is "shell-ast should know about [tool]" or "hook-kit should ship default rules for [scenario]." Most of those are architecturally rejected, not just deferred — the difference matters when re-evaluating.
 
-Specific rejected ideas, preserved for future reference:
+This section is split into two subsections per a 2026-05-18 BUG-008 postmortem lesson (memory: `feedback_dont_conflate_deferred_with_rejected.md`). **Architecturally rejected** features stay rejected for the structural reason listed; "a consumer asked" doesn't unlock them. **Deferred** features have an explicit revisit-condition; when the condition triggers, they ship.
 
-- **shell-ast shipping per-tool semantic schemas** (gcc / git / docker / kubectl). Rejected: per-tool knowledge belongs in hook-kit. shell-ast's `GLOBAL_VALUE_FLAGS` table is the *minimum* needed to keep positional parsing correct — not a wedge for shipping full grammars.
-- **shell-ast adding a `Role` vocabulary** (`fs-read`, `fs-write`, `fs-cwd`, `config`, …). Rejected: shell-ast doesn't tag tokens with semantic roles. Consumer tags whatever they want.
-- **shell-ast adding a fluent `Query<T>` chain class** (LINQ-style). Rejected: native `Array.prototype` + Iterator Helpers already cover the chain case. Don't reinvent.
-- **shell-ast adding `unwrapDeep` for chained wrappers**. Deferred indefinitely: consumers can do this themselves with `unwrapCallParsed` + `findCalls` recursion. Will revisit only when hook-kit hits real pain.
-- **hook-kit shipping a pre-built rule library**. Rejected: hook-kit ships *primitives*, consumers ship *rules*. `examples/ai-guardrails/src/hooks.ts` is the reference for how a downstream composes them — it lives in examples, not in `src/`.
-- **GitHub Actions auto-publish workflow**. Rejected: see principle 7.
+### Architecturally rejected
+
+- **shell-ast shipping per-tool semantic schemas** (gcc / git / docker / kubectl). Per-tool knowledge belongs in hook-kit. shell-ast's `GLOBAL_VALUE_FLAGS` table is the *minimum* needed to keep positional parsing correct — not a wedge for shipping full grammars.
+- **shell-ast adding a `Role` vocabulary** (`fs-read`, `fs-write`, `fs-cwd`, `config`, …). shell-ast doesn't tag tokens with semantic roles. Consumer tags whatever they want.
+- **shell-ast adding a fluent `Query<T>` chain class** (LINQ-style). Native `Array.prototype` + Iterator Helpers already cover the chain case. Don't reinvent.
+- **hook-kit shipping a pre-built rule library**. hook-kit ships *primitives*, consumers ship *rules*. `examples/ai-guardrails/src/hooks.ts` is the reference for how a downstream composes them — it lives in examples, not in `src/`.
+- **GitHub Actions auto-publish workflow**. See principle 7 — manual publish is what makes the load-bearing verification step impossible to skip.
 - **Default schemas / Role vocabulary / schema registry / per-tool plugin runtime**. All rejected during v0.5.0 design — see `docs/plans/v0.5.0.md` "What this release explicitly does NOT ship."
+
+### Deferred (with revisit-conditions)
+
+(Currently empty as of 2026-05-18. `unwrapDeep` was the last entry here; shipped in v0.7.0 once hook-kit-Claude filed #11 with the asymmetry argument that met the revisit gate. The shape of an entry in this section:)
+
+- ~~**shell-ast adding `unwrapDeep` for chained wrappers**~~ — **SHIPPED v0.7.0** ([plan](./plans/v0.7.0.md), closes [BUG-008](./BUGS.md), closes [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11)). Original deferral rationale: "consumers can do this themselves with `unwrapCallParsed` + `findCalls` recursion." Revisit gate: "when hook-kit hits real pain." Gate triggered by hook-kit's asymmetric-classification argument on #11. Lesson — see memory `feedback_verify_escape_hatch_claims.md`: the escape-hatch claim ("hook-kit's recurseInlineShells covers `sudo bash -c \"rm\"`") was wrong and got carried unverified across two releases.
 
 ---
 
@@ -219,13 +226,21 @@ Before shipping a new piece of derived information, ask: *can the consumer reach
 
 This principle does NOT mean "ship every conceivable derived view." It means "if you ship A on `ResolvedCall`, audit whether `UnwrappedCall` needs a mirror — and if so, do it in the same release."
 
+### Sibling rule: asymmetric variant classification
+
+Added 2026-05-18 from the v0.7.0 BUG-008 postmortem (memory: `feedback_asymmetric_variant_classification.md`).
+
+When the same logical chain produces different lens shapes depending on which wrappers compose it, the lens is asymmetric. Worked example: `bash -c '…'` classifies as `wrapped-script` (auto-recursed via `unwrapCallParsed`), but `sudo bash -c '…'` classifies as `wrapped`-with-shell-inner (consumer-recursed). Same chain, different code path. Consumer has to re-implement what the lens does one wrapper away. That asymmetry IS the primary-lens problem, sibling to the "data-dropped-at-the-boundary" original.
+
+Filter: when adding a wrapper variant or a new wrapper entry, test the with-wrapper-prefix shape (`sudo X`, `doas X`, `env X`) alongside the bare shape (`X`). Snapshot it in `tests/wrapper-shapes.test.ts`. If the resulting shapes diverge such that consumers would walk them differently, that's a design smell — close the gap (e.g., ship the auto-recursion via `unwrapDeep` / `unwrapDeepParsed`) or document the asymmetry as a deliberate boundary.
+
 ---
 
 ## Direction (snapshot — refresh as plans evolve)
 
 ### shell-ast
 
-Currently at `0.6.0`. v0.5.x was the "toolkit primitives" baseline; v0.6.0 closes the primary-lens-completeness gap (see §11) — `flagValues` + `innerRaw` on `UnwrappedCall`, polymorphic query helpers. Beyond 0.6.0, more primitives land only when hook-kit hits real pain — no schemas, no roles, no per-tool default DB. See `docs/plans/v0.5.0.md` and `docs/plans/v0.6.0.md` for what landed and what was explicitly deferred.
+Currently at `0.7.0`. v0.5.x was the "toolkit primitives" baseline; v0.6.0 closed the primary-lens-completeness gap (see §11) — `flagValues` + `innerRaw` on `UnwrappedCall`, polymorphic query helpers. v0.7.0 closed the chained-wrapper asymmetry (see §11 sibling rule) — `unwrapDeep` + `unwrapDeepParsed`. Beyond 0.7.0, more primitives land only when hook-kit hits real pain — no schemas, no roles, no per-tool default DB. See `docs/plans/v0.5.0.md`, `docs/plans/v0.6.0.md`, `docs/plans/v0.7.0.md` for what landed and what was explicitly deferred.
 
 ### hook-kit
 
@@ -252,4 +267,4 @@ Methodology + tooling plugins. Bootstrapped via `qsm-setup`. The Stop hook's `DE
 
 Cross-project decisions reference this doc by section. When proposing a change that touches scope boundaries, cite which principle applies. When a principle is wrong for a new situation, **update this doc first** — don't quietly violate it.
 
-Last updated: 2026-05-18.
+Last updated: 2026-05-18 (v0.7.0 — `unwrapDeep`, IDEOLOGY refactor per BUG-008 postmortem).

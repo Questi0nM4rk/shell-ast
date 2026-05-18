@@ -488,9 +488,11 @@ event.
 
 ## BUG-008: `unwrapDeep(call)` for chained wrappers
 
+**Status:** FIXED in v0.7.0 (2026-05-18). Closes [#11](https://github.com/Questi0nM4rk/issue/11). See [`docs/plans/v0.7.0.md`](./plans/v0.7.0.md) for the locked design + the four BUG-008-postmortem lessons in session memory (`feedback_user_is_the_consumer.md` extended, `feedback_dont_conflate_deferred_with_rejected.md`, `feedback_verify_escape_hatch_claims.md`, `feedback_asymmetric_variant_classification.md`).
+
 **Severity:** MEDIUM — correctness gap for layered wrappers.
 
-**Reported:** 2026-05-13.
+**Reported:** 2026-05-13. Deferred in v0.5.0 (rationale: "unwrapCallParsed + findCalls cover this manually") and v0.6.0 (rationale: "hook-kit's recurseInlineShells covers `sudo bash -c \"rm\"`" — this claim was wrong; recurseInlineShells fires only on `wrapped-script`, not on `wrapped` with shell inner). Hook-kit filed #11 2026-05-18 with the asymmetry argument that closed it.
 
 **Symptom:** `sudo bash -c 'rm -rf /'` is three semantic layers: sudo wraps
 bash wraps an opaque script. Today `unwrapCall` peels one layer. The

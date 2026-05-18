@@ -355,3 +355,28 @@ exports[`UnwrappedCall snapshot regression wrapped-opaque — bash -c $script 1`
   "wrapper": "bash",
 }
 `;
+
+exports[`UnwrappedCall snapshot regression chained — sudo bash -c '...' 1`] = `
+{
+  "args": [
+    "rm -rf /tmp/x",
+  ],
+  "cmd": "bash",
+  "flagValues": {},
+  "flags": [
+    "-c",
+  ],
+  "innerRaw": {
+    "argCount": 3,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+  "kind": "wrapped",
+  "raw": {
+    "argCount": 4,
+    "headLit": "sudo",
+    "type": "CallExpr",
+  },
+  "wrapper": "sudo",
+}
+`;
