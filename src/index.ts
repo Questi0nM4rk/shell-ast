@@ -58,6 +58,7 @@ import type { CallExprNode } from "./types.js";
 
 export type { UnwrappedCall } from "./semantic.js";
 export { unwrapCall } from "./semantic.js";
+export { unwrapDeep, unwrapDeepParsed } from "./wrappers/index.js";
 
 // ─── Effects API ─────────────────────────────────────────────────────────────
 

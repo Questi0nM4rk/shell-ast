@@ -9,3 +9,5 @@
 export type { UnwrappedCall } from "./types.js";
 export { unwrapCall } from "./unwrap.js";
 export { unwrapCallParsed } from "./unwrap-async.js";
+export { unwrapDeep } from "./unwrap-deep.js";
+export { unwrapDeepParsed } from "./unwrap-deep-async.js";

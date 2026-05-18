@@ -40,6 +40,8 @@ npm install @questi0nm4rk/shell-ast
 
 Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Works in Node ≥ 18, Bun, and `bun build --compile` standalone binaries — same code, every deployment mode.
 
+> **What's new in 0.7.0** ([plan](./docs/plans/v0.7.0.md)) — `unwrapDeep(call)` and `unwrapDeepParsed(call, parse)` return the wrapper chain for chained invocations like `sudo bash -c 'rm -rf /'` as `UnwrappedCall[]` outermost-first. Closes the asymmetry where `bash -c '…'` auto-recursed via `wrapped-script` but adding `sudo` made the consumer own the recursion. Same logical chain, single migration. Closes [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11), fixes [BUG-008](./docs/BUGS.md).
+>
 > **What's new in 0.6.0** ([plan](./docs/plans/v0.6.0.md)) — `unwrapCall` is now the complete primary lens. `flagValues` and `innerRaw` land on `UnwrappedCall.wrapped`, so the inner call's value-flags and the synthetic inner `CallExprNode` are reachable directly from `u` instead of via `u.raw` walks or re-running `resolveFlags`. Query helpers (`tokenAfter`, `hasFlag`, `flagsMatching`, …) accept `UnwrappedCall` and dispatch to the inner call automatically. See [IDEOLOGY §11](./docs/IDEOLOGY.md) for the principle this closes. Closes [#9](https://github.com/Questi0nM4rk/shell-ast/issues/9).
 >
 > **What's new in 0.5.0** — toolkit primitives for writing per-command rules. New zero-config query helpers (`tokenAfter`, `hasFlag`, `tokensAfter`, `tokenAt`, `indexOfFlag`, `flagsMatching`, `resolvedCmd`), new `flagValues` field on `ResolvedCall` preserving consumed value-flag values, optional `globalFlags` on `resolveFlags(call, opts?)` and `unwrapCall(call, opts?)` so consumers can register their own value-taking flags per-call, basename match for path-shaped tool names (`/usr/bin/git`), and `findRedirects(ast, {depth: "top"})` parity with `findCalls`.
@@ -72,6 +74,7 @@ $(rm -rf /)                 # CmdSubst: nested calls
 
 - **Discriminated `UnwrappedCall`** — `plain` / `wrapped` / `wrapped-script` / `wrapped-opaque` with exhaustiveness checking. Recognizes 17 wrappers: `sudo`, `doas`, `pkexec`, `run0`, `gosu`, `runuser`, `setpriv`, `su`, `sh`, `bash`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `exec`. In 0.6.0, `wrapped` also carries `flagValues` (inner-call's value-flag map) and `innerRaw` (the synthetic inner `CallExprNode`), so wrapper-aware rules don't fall back to `u.raw` walks.
 - **Polymorphic query helpers** *(0.6.0)* — every helper accepts `CallExprNode | UnwrappedCall`. For `wrapped`, it dispatches to the inner call automatically: `tokenAfter(u, "-o")` returns the inner `gcc -o` value even when wrapped in `sudo gcc`. Wrapper-side queries stay reachable via explicit `tokenAfter(u.raw, "-u")`.
+- **Chained-wrapper unwrap** *(0.7.0)* — `unwrapDeep(call)` returns the chain as `UnwrappedCall[]` outermost-first for inputs like `sudo bash -c '…'` (chain length 2 sync — stops at `wrapped-script`). `unwrapDeepParsed(call, parse)` continues past `wrapped-script` by parsing the inner script (chain length 3 — `wrapped → wrapped-script → plain`). Consumers walk a uniform list regardless of which wrappers compose.
 - **Per-tool global value-flag tables** *(0.4.0)* — `git -C /tmp worktree add` parses with `args: ["worktree", "add"]`, not `args: ["/tmp", "worktree", "add"]`. Covers `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / wrapper unwrapping inherits the table on the inner call automatically. Closes [BUG-000](./docs/BUGS.md).
 - **Zero-config query helpers** *(new in 0.5.0)* — `tokenAfter(call, "-o")`, `hasFlag(call, "-r")`, `tokensAfter(call, "-c")`, `tokenAt(call, i)`, `indexOfFlag(call, "-C")`, `flagsMatching(call, predicate)`, `resolvedCmd(call)`. Both space form and `=` form handled. The toolkit primitives for hook-kit-style rule authors.
 - **`flagValues` on `ResolvedCall`** *(new in 0.5.0)* — captured values for every value-taking flag the resolver recognized, indexed by flag name. Both `--git-dir=/repo` and `--git-dir /repo` populate the same key; repeated flags appear in order.
@@ -218,6 +221,28 @@ const violations = findCalls(ast)
 
 `tokenAfter` handles both `--git-dir /repo` and `--git-dir=/repo` forms internally. For wrapper-side queries (e.g. "did sudo escalate to root?"), pass `u.raw` explicitly: `tokenAfter(u.raw, "-u")`.
 
+### Chained wrappers — `unwrapDeep` (0.7.0)
+
+For `sudo bash -c 'rm -rf /'` and similar chained-wrapper invocations, `unwrapCall` peels exactly one layer. The lens classifies `bash -c '…'` as `wrapped-script` (auto-recursed via `unwrapCallParsed`) but `sudo bash -c '…'` as `wrapped`-with-shell-inner — same logical chain, different lens shape. `unwrapDeep` (sync) and `unwrapDeepParsed` (async, re-parses the inner script) return the chain as `UnwrappedCall[]` outermost-first so consumers walk a uniform list.
+
+```typescript
+// "is `rm` or `gcc` anywhere in this invocation chain?" — works for sudo bash -c '...' too
+import { findCalls, parse, unwrapDeepParsed } from "@questi0nm4rk/shell-ast";
+
+const ast = await parse("sudo bash -c 'gcc -o /etc/passwd src.c'");
+for (const call of findCalls(ast)) {
+  const chain = await unwrapDeepParsed(call, parse);
+  for (const layer of chain) {
+    if (layer.kind !== "plain" && layer.kind !== "wrapped") continue;
+    if (layer.cmd === "gcc" && layer.flagValues["-o"]?.[0]?.startsWith("/etc/")) {
+      console.warn(`gcc writes to system path via chain: ${chain.map((l) => l.cmd ?? l.wrapper).join(" → ")}`);
+    }
+  }
+}
+```
+
+`unwrapDeep` stops at the first non-`wrapped` layer (sync can't re-parse). `unwrapDeepParsed` continues past `wrapped-script` and hydrates `innerAst` on that layer. Both cap internally at `MAX_CHAIN_DEPTH = 100` as a defensive runaway guard; consumers should cap on the returned array length per their own policy (hook-kit caps at 5).
+
 ---
 
 ## Architecture
@@ -285,6 +310,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 ## Docs
 
 - [**docs/IDEOLOGY.md**](./docs/IDEOLOGY.md) — ecosystem philosophy: where shell-ast stops, what hook-kit / ai-guardrails / feets own, what we explicitly do NOT do and why
+- [**docs/plans/v0.7.0.md**](./docs/plans/v0.7.0.md) — what was added in 0.7.0 and why (chained-wrapper unwrap — `unwrapDeep` / `unwrapDeepParsed`, closes BUG-008)
 - [**docs/plans/v0.6.0.md**](./docs/plans/v0.6.0.md) — what was added in 0.6.0 and why (primary-lens completeness — `flagValues` + `innerRaw` on `UnwrappedCall`, polymorphic query helpers)
 - [**docs/plans/v0.5.0.md**](./docs/plans/v0.5.0.md) — what was added in 0.5.0 and why (toolkit primitives, no per-tool semantics in shell-ast)
 - [**docs/MIGRATION-v0.4.0.md**](./docs/MIGRATION-v0.4.0.md) — what changed in 0.4.0 (per-tool global flag tables) and how to update consumer code
