@@ -1,4 +1,4 @@
-# shell-ast — Known Bugs
+# shell-ast — Consumer-pain log & limitations
 
 ## BUG-000: Global value-taking flags (`-C`, `-H`, `--context`, …) shift positional args, breaking subcommand-position matching downstream
 
@@ -106,6 +106,8 @@ This sits above BUG-001 (WASM path) because:
 ---
 
 ## BUG-001: WASM path baked at compile time breaks `bun build --compile`
+
+**Status:** OPEN (workaround documented). The `bun build --compile` standalone-binary path is validated in CI by `tests/smoke/run-compile-smoke.sh`; the consumer-side workaround is in [§ Workaround until fix lands](#workaround-until-fix-lands) below.
 
 **Severity:** CRITICAL — silently breaks all consumers that compile a binary.
 
@@ -234,6 +236,8 @@ to `~/Projects/hook-kit` at the time of writing.
 
 ## BUG-002: `unwrapCall` returns `null` for bare wrapper invocations
 
+**Status:** FIXED in v0.3.0. Bare wrapper invocations (`bash`, `bash --version`, the RHS of `curl … | bash`) now resolve to `{ kind: "plain" }` instead of `null` — see `src/wrappers/unwrap.ts` "Wrapper-named but no inner command found" branch. Shipped as part of the discriminated-union break alongside BUG-003.
+
 **Severity:** HIGH — forces every consumer to ship a `resolveFlags` fallback.
 
 **Reported:** 2026-05-13. Also filed upstream as `Questi0nM4rk/shell-ast#7`.
@@ -280,6 +284,8 @@ A one-line shell-ast fix removes the boilerplate from every consumer.
 ---
 
 ## BUG-003: `UnwrappedCall` shape should be a discriminated union, not three nullable fields
+
+**Status:** FIXED in v0.3.0. `UnwrappedCall` is now a discriminated union (`plain` / `wrapped` / `wrapped-script` / `wrapped-opaque`) keyed on `kind`, with TypeScript exhaustiveness checking. See `src/wrappers/types.ts` and [`docs/MIGRATION-v0.3.0.md`](./MIGRATION-v0.3.0.md).
 
 **Severity:** HIGH — biggest single source of caller-side confusion.
 
@@ -375,6 +381,8 @@ silent-allow regressions.
 
 ## BUG-005: Type guards exported alongside the `DYNAMIC` sentinel
 
+**Status:** FIXED in v0.3.0. `isResolved` and `isDynamic` ship as exported type guards from `src/index.ts`, insulating consumers from sentinel-shape changes in the bundled output.
+
 **Severity:** MEDIUM — refactor-safety.
 
 **Reported:** 2026-05-13.
@@ -421,6 +429,8 @@ sentinel" regressions.
 
 ## BUG-006: `findCalls` needs a `topLevel` option (and `findRedirects` a `writesOnly`)
 
+**Status:** FIXED in v0.3.0. `findCalls(ast, { depth: "top" })` and `findRedirects(ast, { ops: "write" })` both land the depth/op filter in `src/extract.ts`, so consumers no longer re-walk results. (The 0.5.0 query-helper pass refined the surrounding ergonomics.)
+
 **Severity:** MEDIUM — consumer-side filter boilerplate.
 
 **Reported:** 2026-05-13.
@@ -452,6 +462,8 @@ re-filters for top-level shells. Both collapse to a one-line call.
 ---
 
 ## BUG-007: `unwrapCall` for `bash -c '…'` should return the parsed inner AST
+
+**Status:** FIXED in v0.3.0. `unwrapCallParsed` populates `innerAst` on the `wrapped-script` variant, so inline-shell consumers walk the pre-parsed AST instead of re-running `parse(commandString)`. See `src/wrappers/unwrap-async.ts`.
 
 **Severity:** MEDIUM — saves a re-parse.
 
@@ -488,7 +500,7 @@ event.
 
 ## BUG-008: `unwrapDeep(call)` for chained wrappers
 
-**Status:** FIXED in v0.7.0 (2026-05-18). Closes [#11](https://github.com/Questi0nM4rk/issue/11). See [`docs/plans/v0.7.0.md`](./plans/v0.7.0.md) for the locked design + the four BUG-008-postmortem lessons in session memory (`feedback_user_is_the_consumer.md` extended, `feedback_dont_conflate_deferred_with_rejected.md`, `feedback_verify_escape_hatch_claims.md`, `feedback_asymmetric_variant_classification.md`).
+**Status:** FIXED in v0.7.0 (2026-05-18). Closes [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11). See [`docs/plans/v0.7.0.md`](./plans/v0.7.0.md) for the locked design + the four BUG-008-postmortem lessons in session memory (`feedback_user_is_the_consumer.md` extended, `feedback_dont_conflate_deferred_with_rejected.md`, `feedback_verify_escape_hatch_claims.md`, `feedback_asymmetric_variant_classification.md`).
 
 **Severity:** MEDIUM — correctness gap for layered wrappers.
 
@@ -521,6 +533,8 @@ become "given this chain, assert these decisions."
 ---
 
 ## BUG-009: `ParseError` should carry structured position + kind, not just a message
+
+**Status:** FIXED in v0.3.0. The error taxonomy (`ShellAstError` → `ParseSyntaxError` / `ParseSizeError` / `WasmLoadError` / `WasmRuntimeError`) carries `line` / `col` / `snippet` and a `.kind` discriminator, so catch sites distinguish malformed input from infra failure. See `src/index.ts`.
 
 **Severity:** LOW — quality-of-life for diagnostics.
 
@@ -555,6 +569,8 @@ Today both look identical at the catch site.
 ---
 
 ## BUG-010: Export `loadWasm` / add `preloadWasm` from the public API
+
+**Status:** FIXED in v0.3.0. `preloadWasm()` is exported from `src/index.ts` — idempotent, safe to call repeatedly, moves cold-start WASM init out of the first-`parse()` hot path for compiled-binary consumers.
 
 **Severity:** LOW — startup latency optimization.
 
