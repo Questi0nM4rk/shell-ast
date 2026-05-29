@@ -53,10 +53,11 @@
     "build:wasm": "rm -rf dist && mkdir -p dist && GOOS=js GOARCH=wasm go build -o dist/shell-ast.wasm ./processor && cp \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" src/wasm_exec.js",
     "build:ts": "bun build src/index.ts src/semantic.ts --outdir dist --target node --asset-naming='[name].[ext]' && tsc --declaration --emitDeclarationOnly --outDir dist && cp src/wasm_exec.js dist/wasm_exec.js",
     "build": "bun run build:wasm && bun run build:ts",
-    "prepublishOnly": "bun run lint && bun run typecheck && go test ./processor/... && bun test && bun run build",
+    "prepublishOnly": "bun run lint && bun run typecheck && go test ./processor/... && bun test && bun scripts/check-doc-counts.ts && bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src/ tests/"
+    "lint": "biome check src/ tests/",
+    "check:doc-counts": "bun scripts/check-doc-counts.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",
