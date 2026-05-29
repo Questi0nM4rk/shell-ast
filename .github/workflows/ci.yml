@@ -58,6 +58,9 @@ jobs:
       - name: Bun tests
         run: bun test
 
+      - name: Doc-count drift guard
+        run: bun scripts/check-doc-counts.ts
+
       - name: Build TS
         run: bun run build:ts
 
