@@ -22,7 +22,7 @@ const ast = await parse("sudo -u root rm -rf /");
 for (const call of findCalls(ast)) {
   const u = unwrapCall(call);
   if (u?.kind === "wrapped" && u.wrapper === "sudo" && u.cmd === "rm")
-    console.log(`blocked: privilege-escalated rm with flags ${u.flags}`);
+    console.log(`blocked: privilege-escalated rm with flags ${u.flags.join(" ")}`);
 }
 ```
 
@@ -46,7 +46,7 @@ Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Wor
 >
 > **What's new in 0.5.0** — toolkit primitives for writing per-command rules. New zero-config query helpers (`tokenAfter`, `hasFlag`, `tokensAfter`, `tokenAt`, `indexOfFlag`, `flagsMatching`, `resolvedCmd`), new `flagValues` field on `ResolvedCall` preserving consumed value-flag values, optional `globalFlags` on `resolveFlags(call, opts?)` and `unwrapCall(call, opts?)` so consumers can register their own value-taking flags per-call, basename match for path-shaped tool names (`/usr/bin/git`), and `findRedirects(ast, {depth: "top"})` parity with `findCalls`.
 >
-> **What's new in 0.4.0** ([changelog](./docs/MIGRATION-v0.4.0.md)) — per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). Closes [BUG-000](./docs/BUGS.md).
+> **What's new in 0.4.0** ([migration guide](./docs/MIGRATION-v0.4.0.md)) — per-tool global value-taking flags (`git -C`, `docker -H`, `kubectl --context`, `make -C`, `tar -C`, `xargs -I/-n`). Closes [BUG-000](./docs/BUGS.md).
 >
 > **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples for the v0.3.0 discriminated-union change.
 
