@@ -14,7 +14,7 @@ This is the bottom layer. Consumers: `hook-kit` (rules + per-tool knowledge), `a
 
 ```bash
 bun install                       # deps
-bun test                          # 245 TypeScript tests
+bun test                          # run the TypeScript suite
 go test ./processor/...           # 52 Go tests + 44-case schema lock
 bun run typecheck                 # tsc --noEmit
 bun run lint                      # biome check src/ tests/
@@ -97,7 +97,7 @@ Source-side `bun test` is NOT sufficient — it runs against `src/`, not the bun
 
 ## Testing
 
-- **245 TypeScript tests** via `bun test`. Per-feature files (`tests/extract.test.ts`, `tests/semantic.test.ts`, `tests/query.test.ts`, `tests/flag-values.test.ts`, `tests/resolve-flags-options.test.ts`, `tests/global-flags.test.ts`, `tests/v0.3.0-surface.test.ts`, `tests/types-drift.test.ts`, `tests/parse.test.ts`, `tests/helpers.test.ts`, `tests/security.test.ts`, `tests/wasm.test.ts`).
+- **351 TypeScript tests** via `bun test`. Per-feature files (`tests/extract.test.ts`, `tests/semantic.test.ts`, `tests/query.test.ts`, `tests/flag-values.test.ts`, `tests/resolve-flags-options.test.ts`, `tests/global-flags.test.ts`, `tests/v0.3.0-surface.test.ts`, `tests/types-drift.test.ts`, `tests/parse.test.ts`, `tests/helpers.test.ts`, `tests/security.test.ts`, `tests/wasm.test.ts`).
 - **52 Go tests** + **44-case schema completeness lock** via `go test ./processor/...`. The schema lock fails if mvdan/sh adds a node type that our serializer doesn't cover. CI also runs a 30s fuzz of the serializer.
 - **`tests/smoke/`** — `run-compile-smoke.sh` validates the `bun build --compile` deployment path (BUG-001 regression). `run-consumer-install-smoke.sh` validates the consumer-install path (gh #5 regression). Both run in CI. **Run them locally if you're touching anything WASM-load-shaped.**
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `Bun.spawn` / `execSync` / `spawnSync` / `Deno.run` / `Deno.Command` / `worker_threads` / `node:vm` / etc. and fails on any match. We parse shell strings; we don't run them.

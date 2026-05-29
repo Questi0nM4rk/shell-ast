@@ -288,7 +288,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Quality bar
 
-- **245 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
+- **351 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
 - **Two regression smokes** baked into CI — compiled-binary deployment ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)), consumer install from-elsewhere ([BUG-001](./docs/BUGS.md))
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `node:child_process` / `worker_threads` / `node:worker_threads` / `node:vm` / `execSync` / `spawnSync` / `Bun.spawn` / `Deno.run` / `Deno.Command` and fails the build on any match. The library parses shell strings; the test suite must never run them.
 - **Dependabot-tracked** for Go, npm, and GitHub Actions ecosystems
@@ -330,7 +330,7 @@ git clone https://github.com/Questi0nM4rk/shell-ast
 cd shell-ast
 bun install
 bun run build      # build wasm + bundle ts
-bun test           # 245 TypeScript tests
+bun test           # run the TypeScript suite
 go test ./processor/...    # 52 Go tests + 44-case schema lock
 ```
 
