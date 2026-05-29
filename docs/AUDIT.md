@@ -1,5 +1,7 @@
 # shell-ast — Codebase Audit
 
+> Historical — all findings resolved as of v0.4.0. Kept for provenance.
+
 **Date:** 2026-05-11
 **Scope:** Full audit of `@questi0nm4rk/shell-ast` v0.1.0
 **Reviewer:** External validation pass — security, correctness, optimization, modularity, DRY/KISS, build/CI hygiene
