@@ -1,0 +1,93 @@
+# git-cliff ~ configuration file
+# https://git-cliff.org/docs/configuration
+#
+# Reusable template for the qsm tool stack. Conventional-commits grouping,
+# Keep-a-Changelog-style output, semver (`vX.Y.Z`) tags, oldest-first within
+# each group. Copy verbatim into a sibling repo and it works unchanged.
+
+[changelog]
+# Keep a Changelog-style header.
+header = """
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n
+"""
+# A Tera template rendered for each release. The `striptags` filter drops the
+# `<!-- N -->` ordering hints from the group names; the numbers only control
+# the order groups appear in (Features → Bug Fixes → … → Chore).
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+            {% if commit.breaking %}[**breaking**] {% endif %}\
+            {{ commit.message | upper_first }}\
+    {% endfor %}
+{% endfor %}\n
+"""
+# Strip leading/trailing whitespace from the rendered body.
+trim = true
+# Render the changelog even when there are no releases yet.
+render_always = true
+# Regex postprocessors applied to the rendered changelog. None needed by default.
+postprocessors = []
+
+[git]
+# Parse commits per the Conventional Commits spec.
+conventional_commits = true
+# Drop commits that aren't conventional (chatter, merge noise) from the log.
+filter_unconventional = true
+# Don't require every commit to be conventional — just filter the ones that aren't.
+require_conventional = false
+# Treat each commit as a single unit (don't split on newlines).
+split_commits = false
+# No message rewriting before parsing.
+commit_preprocessors = []
+# Keep breaking-change commits even if a parser would otherwise skip them.
+protect_breaking_commits = true
+# Group commits into Keep-a-Changelog sections. The `<!-- N -->` prefixes are
+# ordering hints stripped from the rendered header by the body template's
+# `striptags` filter; lower N renders first.
+#
+# ORDER MATTERS: the first matching parser wins. Skip rules come FIRST so that
+# release-prep chores are dropped before any later content matcher (notably the
+# broad `body = ".*security"` fallback) can claim them — a `chore(release)`
+# whose body happens to mention "security" must still be skipped, not grouped.
+commit_parsers = [
+    # Release-prep / dependency / merge chores are noise in a changelog — drop
+    # them before anything else can group them.
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore\\(deps.*\\)", skip = true },
+    { message = "^chore\\(pr\\)", skip = true },
+    { message = "^chore\\(pull\\)", skip = true },
+    # Type-based groupings.
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { message = "^refactor", group = "<!-- 3 -->Refactor" },
+    { message = "^docs?", group = "<!-- 4 -->Documentation" },
+    { message = "^test", group = "<!-- 5 -->Testing" },
+    # Security: an explicit `*(security)` scope, then a `security` body trailer
+    # as a fallback. The body matcher is broad, so it sits AFTER the skips and
+    # the precise type groupings above.
+    { message = "^[a-z]+\\(security\\)", group = "<!-- 6 -->Security" },
+    { body = ".*security", group = "<!-- 6 -->Security" },
+    { message = "^chore|^ci|^build", group = "<!-- 7 -->Chore" },
+    { message = "^revert", group = "<!-- 8 -->Revert" },
+]
+# Drop commits that no parser matched (keeps the log to the conventional set).
+filter_commits = true
+# Only cut releases from semver-shaped tags (`v1.2.3`).
+tag_pattern = "v[0-9]*"
+# Order releases newest-first (standard changelog reading order).
+topo_order = false
+# Within each group, list the oldest commit first.
+sort_commits = "oldest"
