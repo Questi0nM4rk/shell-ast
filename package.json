@@ -57,7 +57,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ tests/",
-    "check:doc-counts": "bun scripts/check-doc-counts.ts"
+    "check:doc-counts": "bun scripts/check-doc-counts.ts",
+    "changelog": "git cliff -o CHANGELOG.md",
+    "changelog:unreleased": "git cliff --unreleased --prepend CHANGELOG.md"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",
