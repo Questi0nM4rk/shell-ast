@@ -31,12 +31,12 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./semantic": {
-      "import": "./dist/semantic.js",
-      "types": "./dist/semantic.d.ts"
+      "types": "./dist/semantic.d.ts",
+      "import": "./dist/semantic.js"
     }
   },
   "files": [
