@@ -1,0 +1,20 @@
+{
+  // Declaration-emit config for `build:ts` (tsc --emitDeclarationOnly).
+  //
+  // The root tsconfig.json now includes scripts/** so the editor LSP and
+  // `bun run typecheck` cover the drift guard. But scripts/ lives outside
+  // src/, so the root config cannot also set `rootDir: "./src"` (TS6059:
+  // "file is not under rootDir"). The root config is therefore rootDir-less
+  // and type-check-only (--noEmit).
+  //
+  // The published package still needs FLAT declarations (dist/index.d.ts, not
+  // dist/src/index.d.ts), which requires `rootDir: "./src"` on a src-only
+  // program (without it, TS5011 fires under TS 6). This config re-adds rootDir
+  // and narrows the program back to src/** for emit only.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "src/wasm_exec.js"]
+}

@@ -6,7 +6,6 @@
     "lib": ["ES2024"],
     "types": ["bun-types"],
     "outDir": "./dist",
-    "rootDir": "./src",
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -21,6 +20,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "tests", "src/wasm_exec.js"]
 }

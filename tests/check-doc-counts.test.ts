@@ -14,7 +14,7 @@ import {
   findTestCountMismatches,
   findVersionMarkerMismatches,
   parseRanCount,
-} from "../scripts/check-doc-counts.ts";
+} from "../scripts/check-doc-counts.js";
 
 describe("parseRanCount", () => {
   test("extracts the count from a bun test summary line", () => {
