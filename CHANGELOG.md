@@ -7,9 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **docs:** Reconcile TypeScript test count to live 351
+
 ### Documentation
 
 - **claude:** Apply v0.7.0 ideology — plan-doc hygiene checklist, BUG-008 postmortem references
+- Clean hero snippet, relabel 0.4.0 link
+- **bugs:** Reconcile statuses, fix issue link, retitle log
+- **audit:** Mark AUDIT.md historical
+- Add SECURITY.md
+
+### Testing
+
+- Add doc-count drift guard
+
+### Security
+
+- Add git-cliff config + generated CHANGELOG
+
+### Chore
+
+- **pkg:** Order exports conditions types-first
 
 ## [0.7.0] - 2026-05-18
 
