@@ -15,7 +15,7 @@
 // consumer is reconciled by deriving the wasm filename inline below
 // and letting the bundler rewrite the import path.
 //
-// Earlier history (see docs/BUGS.md BUG-001 and docs/AUDIT.md A1):
+// Earlier history (see docs/BUGS.md BUG-001 and docs/decisions/codebase-audit-v0.4.0.md A1):
 //   - v0.1.0 used `import.meta.dirname` directly → BUG-001 baked the
 //     build-machine path into `bun build --compile` output
 //   - v0.2.0 used `with { type: "file" }` → bundler emitted a

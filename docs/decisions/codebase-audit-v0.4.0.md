@@ -1,5 +1,7 @@
 # shell-ast — Codebase Audit
 
+## Status: Reference (historic — findings resolved v0.4.0)
+
 > Historical — all findings resolved as of v0.4.0. Kept for provenance.
 
 **Date:** 2026-05-11

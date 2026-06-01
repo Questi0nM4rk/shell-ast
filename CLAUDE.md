@@ -137,7 +137,7 @@ For non-trivial features (anything beyond a one-line fix), the working pattern i
 | [`README.md`](./README.md) | User-facing intro, install, recipes, comparison table |
 | [`docs/IDEOLOGY.md`](./docs/IDEOLOGY.md) | Ecosystem philosophy, layering, principles, scope rejects |
 | [`docs/BUGS.md`](./docs/BUGS.md) | Consumer-pain log (BUG-NNN entries, severity-ordered) |
-| [`docs/AUDIT.md`](./docs/AUDIT.md) | Historic codebase audit findings |
+| [`docs/decisions/codebase-audit-v0.4.0.md`](./docs/decisions/codebase-audit-v0.4.0.md) | Historic codebase audit findings (resolved v0.4.0) |
 | [`docs/MIGRATION-v0.3.0.md`](./docs/MIGRATION-v0.3.0.md) | v0.2.x → v0.3.0 (discriminated UnwrappedCall) |
 | [`docs/MIGRATION-v0.4.0.md`](./docs/MIGRATION-v0.4.0.md) | v0.3.x → v0.4.0 (per-tool global value-flag tables) |
 | [`docs/plans/v0.5.0.md`](./docs/plans/v0.5.0.md) | v0.5.0 plan + locked decisions (toolkit primitives) |
