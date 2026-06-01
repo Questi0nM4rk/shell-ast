@@ -316,7 +316,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 - [**docs/MIGRATION-v0.4.0.md**](./docs/MIGRATION-v0.4.0.md) — what changed in 0.4.0 (per-tool global flag tables) and how to update consumer code
 - [**docs/MIGRATION-v0.3.0.md**](./docs/MIGRATION-v0.3.0.md) — search-and-replace cheatsheet + per-API examples for v0.2.x consumers
 - [**docs/BUGS.md**](./docs/BUGS.md) — consumer-pain log; each entry cites the consumer file:line where friction shows up
-- [**docs/AUDIT.md**](./docs/AUDIT.md) — internal codebase audit history
+- [**docs/decisions/codebase-audit-v0.4.0.md**](./docs/decisions/codebase-audit-v0.4.0.md) — internal codebase audit history (resolved v0.4.0)
 - [**docs/specs/**](./docs/specs/) — design specs (development archaeology; not required reading)
 
 ---
