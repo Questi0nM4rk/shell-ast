@@ -110,6 +110,83 @@ describe("BUG-000: global value-taking flags shift positional args correctly", (
   });
 });
 
+describe("GLOBAL_VALUE_FLAGS — agent-critical tools (v0.8.0)", () => {
+  test("aws --region consumes its value; args[0] is s3", async () => {
+    const r = resolveFlags(
+      await firstCall("aws --region us-east-1 s3 rm s3://b --recursive")
+    );
+    expect(r?.cmd).toBe("aws");
+    expect(r?.flags).toEqual(["--region", "--recursive"]);
+    expect(r?.args).toEqual(["s3", "rm", "s3://b"]);
+    expect(r?.args[0]).toBe("s3");
+  });
+
+  test("gcloud --project consumes its value; args[0] is compute", async () => {
+    const r = resolveFlags(
+      await firstCall("gcloud --project p compute instances delete x")
+    );
+    expect(r?.cmd).toBe("gcloud");
+    expect(r?.flags).toEqual(["--project"]);
+    expect(r?.args).toEqual(["compute", "instances", "delete", "x"]);
+    expect(r?.args[0]).toBe("compute");
+  });
+
+  test("terraform -chdir= form (= form); args[0] is apply", async () => {
+    const r = resolveFlags(await firstCall("terraform -chdir=/tf apply -auto-approve"));
+    expect(r?.cmd).toBe("terraform");
+    expect(r?.flags).toEqual(["-chdir=/tf", "-auto-approve"]);
+    expect(r?.args).toEqual(["apply"]);
+    expect(r?.args[0]).toBe("apply");
+  });
+
+  test("terraform -chdir space form consumes /tf; args[0] is apply", async () => {
+    const r = resolveFlags(await firstCall("terraform -chdir /tf apply"));
+    expect(r?.cmd).toBe("terraform");
+    expect(r?.flags).toEqual(["-chdir"]);
+    expect(r?.flagValues).toEqual({ "-chdir": ["/tf"] });
+    expect(r?.args).toEqual(["apply"]);
+    expect(r?.args[0]).toBe("apply");
+  });
+
+  test("npm --prefix consumes its value; args[0] is run", async () => {
+    const r = resolveFlags(await firstCall("npm --prefix /app run build"));
+    expect(r?.cmd).toBe("npm");
+    expect(r?.flags).toEqual(["--prefix"]);
+    expect(r?.args).toEqual(["run", "build"]);
+    expect(r?.args[0]).toBe("run");
+  });
+
+  test("cargo --config consumes its value; args[0] is run", async () => {
+    const r = resolveFlags(
+      await firstCall("cargo --config net.offline=true run --release")
+    );
+    expect(r?.cmd).toBe("cargo");
+    expect(r?.flags).toEqual(["--config", "--release"]);
+    expect(r?.flagValues).toEqual({ "--config": ["net.offline=true"] });
+    expect(r?.args).toEqual(["run"]);
+    expect(r?.args[0]).toBe("run");
+  });
+
+  test("gh -R consumes its value; args[0] is pr", async () => {
+    const r = resolveFlags(await firstCall("gh -R owner/repo pr merge 123"));
+    expect(r?.cmd).toBe("gh");
+    expect(r?.flags).toEqual(["-R"]);
+    expect(r?.args).toEqual(["pr", "merge", "123"]);
+    expect(r?.args[0]).toBe("pr");
+  });
+
+  test("sudo aws --region; inner args[0] is s3", async () => {
+    const u = unwrapCall(await firstCall("sudo aws --region eu-west-1 s3 rm s3://b"));
+    expect(u?.kind).toBe("wrapped");
+    if (u?.kind !== "wrapped") return;
+    expect(u.wrapper).toBe("sudo");
+    expect(u.cmd).toBe("aws");
+    expect(u.flags).toEqual(["--region"]);
+    expect(u.args).toEqual(["s3", "rm", "s3://b"]);
+    expect(u.args[0]).toBe("s3");
+  });
+});
+
 describe("BUG-000: wrapper unwrap inherits the table on the inner call", () => {
   test("sudo git -C /tmp worktree add — inner git uses git's table", async () => {
     const u = unwrapCall(await firstCall("sudo git -C /tmp worktree add /tmp/x"));
