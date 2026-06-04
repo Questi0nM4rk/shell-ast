@@ -48,7 +48,7 @@ export function unwrapCall(
 
   // Standard flag-walker.
   const rawArgs = call.args.slice(1);
-  let userConsumed = !schema.positionalUser;
+  let leadingRemaining = schema.leadingPositionals ?? 0;
   let i = 0;
   while (i < rawArgs.length) {
     const arg = rawArgs[i];
@@ -97,9 +97,9 @@ export function unwrapCall(
       i++;
       continue;
     }
-    // Positional. First one is the username when positionalUser is set.
-    if (!userConsumed) {
-      userConsumed = true;
+    // Leading positional(s): su/gosu user, timeout duration. Skip them.
+    if (leadingRemaining > 0) {
+      leadingRemaining--;
       i++;
       continue;
     }
