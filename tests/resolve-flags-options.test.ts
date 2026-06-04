@@ -19,8 +19,9 @@ async function firstCall(src: string) {
 
 describe("resolveFlags(call, opts.globalFlags) — consumer-registered tools", () => {
   test("registers a new tool not in the built-in table", async () => {
-    const r = resolveFlags(await firstCall("terraform -chdir /tf apply"), {
-      globalFlags: { terraform: ["-chdir", "-state"] },
+    // `frobnicate` is not in GLOBAL_VALUE_FLAGS; consumer opts add it.
+    const r = resolveFlags(await firstCall("frobnicate -chdir /tf apply"), {
+      globalFlags: { frobnicate: ["-chdir", "-state"] },
     });
     expect(r?.flags).toEqual(["-chdir"]);
     expect(r?.args).toEqual(["apply"]);
@@ -46,14 +47,14 @@ describe("resolveFlags(call, opts.globalFlags) — consumer-registered tools", (
   });
 
   test("opts is per-call (no module state)", async () => {
-    // first call with opts
-    const r1 = resolveFlags(await firstCall("terraform -chdir /tf apply"), {
-      globalFlags: { terraform: ["-chdir"] },
+    // first call with opts — consumer-registered tool (not in built-in table)
+    const r1 = resolveFlags(await firstCall("frobnicate -chdir /tf apply"), {
+      globalFlags: { frobnicate: ["-chdir"] },
     });
     expect(r1?.flagValues).toEqual({ "-chdir": ["/tf"] });
 
-    // second call WITHOUT opts → legacy
-    const r2 = resolveFlags(await firstCall("terraform -chdir /tf apply"));
+    // second call WITHOUT opts → legacy (no built-in entry for frobnicate)
+    const r2 = resolveFlags(await firstCall("frobnicate -chdir /tf apply"));
     expect(r2?.flagValues).toEqual({});
     expect(r2?.args).toEqual(["/tf", "apply"]);
   });

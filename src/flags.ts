@@ -428,6 +428,35 @@ const GLOBAL_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
     "-a",
     "--arg-file",
   ]),
+  // Agent-critical tools added v0.8.0 (2026-06):
+  aws: new Set([
+    "--profile",
+    "--region",
+    "--endpoint-url",
+    "--output",
+    "--ca-bundle",
+    "--cli-read-timeout",
+    "--cli-connect-timeout",
+  ]),
+  cargo: new Set(["--config", "--color"]),
+  gcloud: new Set([
+    "--project",
+    "--account",
+    "--configuration",
+    "--format",
+    "--billing-project",
+    "--impersonate-service-account",
+  ]),
+  gh: new Set(["-R", "--repo", "--hostname"]),
+  npm: new Set([
+    "--prefix",
+    "--registry",
+    "--workspace",
+    "-w",
+    "--userconfig",
+    "--globalconfig",
+  ]),
+  terraform: new Set(["-chdir"]),
 };
 
 const EMPTY_VALUE_FLAGS: ReadonlySet<string> = new Set();
