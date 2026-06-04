@@ -20,9 +20,10 @@ export interface WrapperSchema {
   /** When set, this flag's value is itself a shell command string
    *  (`bash -c "..."`). */
   commandFlag?: string;
-  /** When true, the first positional arg is the target username
-   *  (`gosu USER cmd`, `su USER -c "..."`). */
-  positionalUser?: boolean;
+  /** Number of leading positionals to skip before the inner command —
+   *  the username for `su USER -c …` / `gosu USER cmd`, the duration
+   *  for `timeout DURATION cmd`. Default 0. */
+  leadingPositionals?: number;
   /** Some shells take their script via positional args, not a flag:
    *    "concat" — `eval "rm" "-rf" "/"` joins args[1:] with spaces
    *    "first"  — (reserved for future shapes; not currently used)
@@ -84,7 +85,7 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
   gosu: {
     flagsWithArg: new Set([]),
     longEq: false,
-    positionalUser: true,
+    leadingPositionals: 1,
   },
   runuser: {
     flagsWithArg: new Set([
@@ -115,7 +116,7 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     flagsWithArg: new Set(["-s", "-G", "--shell", "--supp-group"]),
     longEq: false,
     commandFlag: "-c",
-    positionalUser: true,
+    leadingPositionals: 1,
   },
   // POSIX shell wrappers carrying a script via -c. Not privilege
   // escalators, but chained patterns like `pkexec sh -c "rm -rf /"`
