@@ -26,6 +26,7 @@ import {
   wordToLit,
 } from "../src/index.js";
 import type { CallExprNode } from "../src/types.js";
+import { testCmd } from "./_assertions.js";
 
 function summarizeCall(c: CallExprNode): {
   type: string;
@@ -91,6 +92,7 @@ function normalize(u: UnwrappedCall | null): unknown {
       return {
         kind: u.kind,
         wrapper: u.wrapper,
+        reason: u.reason,
         flags: u.flags,
         args: u.args.map(normalizeArg),
         raw: summarizeCall(u.raw),
@@ -125,13 +127,14 @@ const cases: Array<{ name: string; src: string }> = [
   { name: "wrapped-script — sh -c", src: 'sh -c "echo hi"' },
   { name: "wrapped-script — eval (commandFromArgs)", src: "eval 'rm -rf /tmp/x'" },
   {
-    name: "wrapped-script — bash -c with trailing args",
+    name: "wrapped-opaque — bash -c with dynamic body + trailing args",
     src: 'bash -c "$@" sh arg1 arg2',
   },
 
   // ─── wrapped-opaque ────────────────────────────────────────────────
   { name: "wrapped-opaque — sudo $cmd", src: "sudo $CMD" },
   { name: "wrapped-opaque — bash -c $script", src: "bash -c $SCRIPT" },
+  { name: "wrapped-opaque — bash -c (missing-script)", src: "bash -c" },
 
   // ─── chained wrapper (per lesson L4: asymmetric variant classification) ─
   // sudo bash -c '…' is the canonical case where bare `bash -c` is
@@ -154,5 +157,28 @@ describe("snapshot helpers — sanity", () => {
   test("normalizeArg renders DYNAMIC as <DYNAMIC>", () => {
     expect(normalizeArg(DYNAMIC)).toBe("<DYNAMIC>");
     expect(normalizeArg("literal")).toBe("literal");
+  });
+});
+
+describe("wrapped-opaque reason discriminator (v0.8.0)", () => {
+  testCmd('bash -c "$CMD"', {
+    kind: "wrapped-opaque",
+    wrapper: "bash",
+    reason: "dynamic-script",
+  });
+  testCmd("bash -c", {
+    kind: "wrapped-opaque",
+    wrapper: "bash",
+    reason: "missing-script",
+  });
+  testCmd("sudo $CMD", {
+    kind: "wrapped-opaque",
+    wrapper: "sudo",
+    reason: "dynamic-command",
+  });
+  testCmd("eval $SCRIPT", {
+    kind: "wrapped-opaque",
+    wrapper: "eval",
+    reason: "dynamic-script",
   });
 });

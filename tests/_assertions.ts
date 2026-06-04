@@ -31,6 +31,8 @@ export interface ExpectedCmd {
   wrapper?: string | null;
   /** Asserts kind === "wrapped-script" and script equals this value. */
   script?: string;
+  /** Asserts kind === "wrapped-opaque" and reason equals this value. */
+  reason?: "dynamic-script" | "dynamic-command" | "missing-script";
 
   // ─── Field-level assertions (any kind) ───────────────────────────
   flags?: string[];
@@ -138,6 +140,12 @@ export function testCmd(src: string, expected: ExpectedCmd): void {
       expect(u?.kind).toBe("wrapped-script");
       if (u?.kind === "wrapped-script") {
         expect(u.script).toBe(expected.script);
+      }
+    }
+    if (expected.reason !== undefined) {
+      expect(u?.kind).toBe("wrapped-opaque");
+      if (u?.kind === "wrapped-opaque") {
+        expect(u.reason).toBe(expected.reason);
       }
     }
     if (expected.flags !== undefined) {

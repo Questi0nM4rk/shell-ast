@@ -65,6 +65,7 @@ export function unwrapCall(
         return {
           kind: "wrapped-opaque",
           wrapper: resolved.cmd,
+          reason: next === undefined ? "missing-script" : "dynamic-script",
           flags: resolved.flags,
           args: resolved.args,
           raw: call,
@@ -134,6 +135,7 @@ export function unwrapCall(
     return {
       kind: "wrapped-opaque",
       wrapper: resolved.cmd,
+      reason: "dynamic-command",
       flags: resolved.flags,
       args: resolved.args,
       raw: call,
@@ -176,6 +178,7 @@ function unwrapPositionalScript(
       return {
         kind: "wrapped-opaque",
         wrapper: resolved.cmd,
+        reason: "dynamic-script",
         flags: resolved.flags,
         args: resolved.args,
         raw: call,
