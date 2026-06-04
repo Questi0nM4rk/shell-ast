@@ -6,6 +6,7 @@
 // (top-level `src/index.ts` already re-exports these; importing from
 // `./wrappers` directly is an internal convention only).
 
+export { isShellInterpreter } from "./classify.js";
 export type { UnwrappedCall } from "./types.js";
 export { unwrapCall } from "./unwrap.js";
 export { unwrapCallParsed } from "./unwrap-async.js";
