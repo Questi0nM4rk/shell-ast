@@ -31,6 +31,10 @@ export interface WrapperSchema {
    *  script field is built from positional args after the wrapper's
    *  own flags are consumed. */
   commandFromArgs?: "concat" | "first";
+  /** When true, skip leading `NAME=value` positional tokens before the
+   *  inner command — `env FOO=bar cmd`. (`env` puts its temp-env
+   *  assignments in argv, not in the shell-level CallExpr.assigns.) */
+  assignmentPrefix?: boolean;
 }
 
 const SHELL_SCHEMA: WrapperSchema = {
@@ -134,4 +138,29 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
   // exec is also handled as a normal wrapper since args[1:] IS the inner command.
   eval: { flagsWithArg: new Set(), longEq: false, commandFromArgs: "concat" },
   exec: { flagsWithArg: new Set(), longEq: false },
+  // Command-introducing wrappers: run another command, like sudo/exec,
+  // but are NOT privilege escalators and NOT script interpreters
+  // (isShellInterpreter stays false - no commandFlag/commandFromArgs).
+  //   env [-u N|-C D|NAME=val ...] cmd   - skip flags + assignment prefix
+  //   timeout [flags] DURATION cmd       - skip one leading positional
+  //   nice [-n N] cmd                    - value flag, then inner
+  //   nohup cmd                          - bare prefix
+  env: {
+    flagsWithArg: new Set(["-u", "--unset", "-C", "--chdir"]),
+    longEq: true,
+    assignmentPrefix: true,
+  },
+  timeout: {
+    flagsWithArg: new Set(["-s", "--signal", "-k", "--kill-after"]),
+    longEq: true,
+    leadingPositionals: 1,
+  },
+  nice: {
+    flagsWithArg: new Set(["-n", "--adjustment"]),
+    longEq: true,
+  },
+  nohup: {
+    flagsWithArg: new Set([]),
+    longEq: false,
+  },
 };

@@ -15,6 +15,12 @@ import type { CallExprNode } from "../types.js";
 import { WRAPPERS, type WrapperSchema } from "./registry.js";
 import type { UnwrappedCall } from "./types.js";
 
+/** A `NAME=value` token (env's temp-env assignment prefix). Bash
+ *  identifier rules: leading letter/underscore, then word chars, `=`. */
+function isAssignment(lit: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(lit);
+}
+
 /** Unwrap a CallExpr. Sync; never parses the inner script for
  *  `wrapped-script` results. Use `unwrapCallParsed` if you need
  *  `innerAst`.
@@ -100,6 +106,11 @@ export function unwrapCall(
     // Leading positional(s): su/gosu user, timeout duration. Skip them.
     if (leadingRemaining > 0) {
       leadingRemaining--;
+      i++;
+      continue;
+    }
+    // env-style NAME=value assignment prefix — skip to the real command.
+    if (schema.assignmentPrefix && isAssignment(lit)) {
       i++;
       continue;
     }
