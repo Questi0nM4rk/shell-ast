@@ -301,7 +301,7 @@ exports[`UnwrappedCall snapshot regression wrapped-script — eval (commandFromA
 }
 `;
 
-exports[`UnwrappedCall snapshot regression wrapped-script — bash -c with trailing args 1`] = `
+exports[`UnwrappedCall snapshot regression wrapped-opaque — bash -c with dynamic body + trailing args 1`] = `
 {
   "args": [
     "<DYNAMIC>",
@@ -318,6 +318,7 @@ exports[`UnwrappedCall snapshot regression wrapped-script — bash -c with trail
     "headLit": "bash",
     "type": "CallExpr",
   },
+  "reason": "dynamic-script",
   "wrapper": "bash",
 }
 `;
@@ -334,6 +335,7 @@ exports[`UnwrappedCall snapshot regression wrapped-opaque — sudo $cmd 1`] = `
     "headLit": "sudo",
     "type": "CallExpr",
   },
+  "reason": "dynamic-command",
   "wrapper": "sudo",
 }
 `;
@@ -352,6 +354,24 @@ exports[`UnwrappedCall snapshot regression wrapped-opaque — bash -c $script 1`
     "headLit": "bash",
     "type": "CallExpr",
   },
+  "reason": "dynamic-script",
+  "wrapper": "bash",
+}
+`;
+
+exports[`UnwrappedCall snapshot regression wrapped-opaque — bash -c (missing-script) 1`] = `
+{
+  "args": [],
+  "flags": [
+    "-c",
+  ],
+  "kind": "wrapped-opaque",
+  "raw": {
+    "argCount": 2,
+    "headLit": "bash",
+    "type": "CallExpr",
+  },
+  "reason": "missing-script",
   "wrapper": "bash",
 }
 `;

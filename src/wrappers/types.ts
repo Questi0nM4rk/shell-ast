@@ -78,6 +78,14 @@ export type UnwrappedCall =
   | {
       kind: "wrapped-opaque";
       wrapper: string;
+      /** Why the inner is unresolvable — lets security consumers decide
+       *  escalation policy without re-deriving it:
+       *   - "dynamic-script":  shell -c / eval given a non-literal body
+       *                        (`bash -c "$CMD"`, `eval $SCRIPT`)
+       *   - "dynamic-command": wrapper given a non-literal inner command
+       *                        (`sudo $CMD`)
+       *   - "missing-script":  shell -c with no body at all (`bash -c`) */
+      reason: "dynamic-script" | "dynamic-command" | "missing-script";
       flags: string[];
       args: ResolvedArg[];
       raw: CallExprNode;
