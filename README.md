@@ -50,6 +50,8 @@ Ships pre-built WASM in `dist/` (4.2 MB). No Go toolchain needed at install. Wor
 >
 > **Migrating from 0.2.x?** See **[docs/MIGRATION-v0.3.0.md](./docs/MIGRATION-v0.3.0.md)** — search-and-replace cheatsheet plus per-API examples for the v0.3.0 discriminated-union change.
 
+**Capabilities & limits:** see [docs/CAPABILITIES.md](./docs/CAPABILITIES.md).
+
 ---
 
 ## Why
