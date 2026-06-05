@@ -118,7 +118,7 @@ const cases: Array<{ name: string; src: string }> = [
     name: "wrapped — sudo with -u + inner global flag",
     src: "sudo -u root git -C /tmp status",
   },
-  { name: "wrapped — positionalUser (gosu)", src: "gosu nobody rm /tmp/x" },
+  { name: "wrapped — leadingPositionals (gosu)", src: "gosu nobody rm /tmp/x" },
   { name: "wrapped — exec strip", src: "exec rm -rf /tmp/x" },
   { name: "wrapped — sudo + basename-path inner", src: "sudo /usr/bin/git status" },
 
