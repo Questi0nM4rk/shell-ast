@@ -30,17 +30,22 @@ bun run prepublishOnly            # lint + typecheck + go tests + bun tests + bu
 src/
   index.ts          parse() + preloadWasm() + ParseError hierarchy + re-exports
   flags.ts          DYNAMIC sentinel, wordToParts, wordToLit, resolveFlags
-                    + GLOBAL_VALUE_FLAGS table (6 tools) + ResolveFlagsOptions
-                    + ResolvedCall.flagValues
+                    + GLOBAL_VALUE_FLAGS table (12 tools: git/docker/kubectl/
+                    make/tar/xargs + aws/gcloud/terraform/npm/cargo/gh) +
+                    ResolveFlagsOptions + ResolvedCall.flagValues
   semantic.ts       back-compat barrel — re-exports from ./wrappers/index.js
                     (existing `from "./semantic.js"` and the `./semantic`
                     subpath export both keep working)
   wrappers/
-    registry.ts        WrapperSchema + WRAPPERS table (17 wrappers:
-                       sudo/doas/pkexec/shells/eval/exec/…)
+    registry.ts        WrapperSchema + WRAPPERS table (21 wrappers:
+                       sudo/doas/pkexec/shells/eval/exec + env/timeout/
+                       nice/nohup command-introducers since 0.8.0)
+    classify.ts        isShellInterpreter(name) predicate (since 0.8.0):
+                       registry-derived, basename-normalized
     types.ts           UnwrappedCall discriminated union (plain / wrapped /
-                       wrapped-script / wrapped-opaque) — wrapped variant
-                       carries flagValues + innerRaw since 0.6.0
+                       wrapped-script / wrapped-opaque) — wrapped carries
+                       flagValues + innerRaw since 0.6.0; wrapped-opaque
+                       carries `reason` since 0.8.0
     unwrap.ts          unwrapCall + internal unwrapPositionalScript
     unwrap-async.ts    unwrapCallParsed (populates wrapped-script innerAst)
     unwrap-deep.ts     unwrapDeep — sync chain walker (since 0.7.0)
@@ -97,7 +102,7 @@ Source-side `bun test` is NOT sufficient — it runs against `src/`, not the bun
 
 ## Testing
 
-- **351 TypeScript tests** via `bun test`. Per-feature files (`tests/extract.test.ts`, `tests/semantic.test.ts`, `tests/query.test.ts`, `tests/flag-values.test.ts`, `tests/resolve-flags-options.test.ts`, `tests/global-flags.test.ts`, `tests/v0.3.0-surface.test.ts`, `tests/types-drift.test.ts`, `tests/parse.test.ts`, `tests/helpers.test.ts`, `tests/security.test.ts`, `tests/wasm.test.ts`).
+- **406 TypeScript tests** via `bun test`. Per-feature files (`tests/extract.test.ts`, `tests/semantic.test.ts`, `tests/query.test.ts`, `tests/flag-values.test.ts`, `tests/resolve-flags-options.test.ts`, `tests/global-flags.test.ts`, `tests/v0.3.0-surface.test.ts`, `tests/types-drift.test.ts`, `tests/parse.test.ts`, `tests/helpers.test.ts`, `tests/security.test.ts`, `tests/wasm.test.ts`, `tests/classify.test.ts`, `tests/wrappers-command-intro.test.ts`).
 - **52 Go tests** + **44-case schema completeness lock** via `go test ./processor/...`. The schema lock fails if mvdan/sh adds a node type that our serializer doesn't cover. CI also runs a 30s fuzz of the serializer.
 - **`tests/smoke/`** — `run-compile-smoke.sh` validates the `bun build --compile` deployment path (BUG-001 regression). `run-consumer-install-smoke.sh` validates the consumer-install path (gh #5 regression). Both run in CI. **Run them locally if you're touching anything WASM-load-shaped.**
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `Bun.spawn` / `execSync` / `spawnSync` / `Deno.run` / `Deno.Command` / `worker_threads` / `node:vm` / etc. and fails on any match. We parse shell strings; we don't run them.
@@ -111,7 +116,7 @@ Read [`docs/IDEOLOGY.md`](./docs/IDEOLOGY.md) section "Where each project stops"
 - **`Role` vocabulary** (`fs-read`, `fs-write`, `fs-cwd`, …) — consumer tags whatever they want.
 - **Fluent `Query<T>` chain class** — native `Array.prototype` + Iterator Helpers cover it.
 - ~~**`unwrapDeep` for chained wrappers**~~ — **SHIPPED v0.7.0** (`unwrapDeep` + `unwrapDeepParsed`). Closed [BUG-008](./docs/BUGS.md) / [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11). Postmortem of the two-release deferral is the canonical worked example for how NOT to defer features — see memory `feedback_dont_conflate_deferred_with_rejected.md` and `feedback_verify_escape_hatch_claims.md`.
-- **Default per-tool schemas beyond the current `GLOBAL_VALUE_FLAGS` 6.**
+- **Default per-tool schemas beyond the current `GLOBAL_VALUE_FLAGS` 12.**
 - **Auto-publish workflow.**
 - **Anything that requires shell-ast to know what a specific tool "means."**
 
@@ -136,6 +141,7 @@ For non-trivial features (anything beyond a one-line fix), the working pattern i
 |---|---|
 | [`README.md`](./README.md) | User-facing intro, install, recipes, comparison table |
 | [`docs/IDEOLOGY.md`](./docs/IDEOLOGY.md) | Ecosystem philosophy, layering, principles, scope rejects |
+| [`docs/CAPABILITIES.md`](./docs/CAPABILITIES.md) | What shell-ast can/can't see — static over-approximation contract, wrapper + flag coverage, `globalFlags` hatch (since 0.8.0) |
 | [`docs/BUGS.md`](./docs/BUGS.md) | Consumer-pain log (BUG-NNN entries, severity-ordered) |
 | [`docs/decisions/codebase-audit-v0.4.0.md`](./docs/decisions/codebase-audit-v0.4.0.md) | Historic codebase audit findings (resolved v0.4.0) |
 | [`docs/MIGRATION-v0.3.0.md`](./docs/MIGRATION-v0.3.0.md) | v0.2.x → v0.3.0 (discriminated UnwrappedCall) |
