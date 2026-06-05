@@ -5,11 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-06-05
+
+### Features
+
+- **wrappers:** Export isShellInterpreter predicate (closes #12)
+- **wrappers:** Add reason discriminator to wrapped-opaque variant
+- **wrappers:** Cover env/timeout/nice/nohup command-introducers
+- **flags:** Add aws/gcloud/terraform/npm/cargo/gh to GLOBAL_VALUE_FLAGS
 
 ### Bug Fixes
 
 - **docs:** Reconcile TypeScript test count to live 351
+
+### Refactor
+
+- **wrappers:** Generalize positionalUser to leadingPositionals
 
 ### Documentation
 
@@ -18,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **bugs:** Reconcile statuses, fix issue link, retitle log
 - **audit:** Mark AUDIT.md historical
 - Add SECURITY.md
+- **changelog:** Regenerate Unreleased from this branch's commits
+- Move resolved v0.4.0 audit into docs/decisions/
+- Add CAPABILITIES.md — static over-approximation contract
+- **bugs:** Mark BUG-001 FIXED + reconcile all statuses for 1.0 readiness
 
 ### Testing
 
@@ -30,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Chore
 
 - **pkg:** Order exports conditions types-first
+- **ts:** Fold scripts into root typecheck (LSP-correct)
+- Remove cc-review workflows
 
 ## [0.7.0] - 2026-05-18
 
