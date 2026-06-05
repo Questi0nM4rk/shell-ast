@@ -177,7 +177,7 @@ exports[`UnwrappedCall snapshot regression wrapped — sudo with -u + inner glob
 }
 `;
 
-exports[`UnwrappedCall snapshot regression wrapped — positionalUser (gosu) 1`] = `
+exports[`UnwrappedCall snapshot regression wrapped — leadingPositionals (gosu) 1`] = `
 {
   "args": [
     "/tmp/x",
