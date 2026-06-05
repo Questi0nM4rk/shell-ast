@@ -2,7 +2,17 @@
 
 ## BUG-000: Global value-taking flags (`-C`, `-H`, `--context`, …) shift positional args, breaking subcommand-position matching downstream
 
-**Status:** FIXED in v0.4.0 (2026-05-15). `resolveFlags` now consults a per-tool `GLOBAL_VALUE_FLAGS` table (`src/flags.ts`) covering `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / doas / pkexec / etc. inherit the table on the inner call automatically because `unwrapCall` re-runs `resolveFlags` after wrapper-stripping.
+**Status:** FIXED in v0.4.0 (2026-05-15). `resolveFlags` now consults a per-tool `GLOBAL_VALUE_FLAGS` table
+(`src/flags.ts`) covering `git`, `docker`, `kubectl`, `make`, `tar`, `xargs`. Sudo / doas / pkexec / etc.
+inherit the table on the inner call automatically because `unwrapCall` re-runs `resolveFlags` after wrapper-stripping.
+
+**v0.8.0 addendum (2026-06):** `GLOBAL_VALUE_FLAGS` now also covers `aws`, `gcloud`, `terraform`,
+`npm`, `cargo`, and `gh` by default. The volatile long-tail stays consumer-injectable via
+`ResolveFlagsOptions.globalFlags` (see `docs/CAPABILITIES.md` "The escape hatch"). Additionally,
+`env`, `timeout`, `nice`, and `nohup` ship as command-introducing wrappers in the WRAPPERS table
+(see `src/wrappers/registry.ts`), and the `wrapped-opaque` variant now carries a `reason`
+discriminator (`"dynamic-script"` | `"dynamic-command"` | `"missing-script"`) so consumers can
+calibrate escalation policy per case.
 
 **Severity:** HIGH — security-relevant. Allows trivial bypass of subcommand-position rules in consumers built on shell-ast (e.g. hook-kit's `cmd(prog, "sub")` matcher).
 
@@ -44,7 +54,10 @@ We considered building per-tool global-flag tables into hook-kit's `CommandRuleB
 
 ### How the v0.4.0 fix works
 
-`resolveFlags(call)` looks up `call.cmd` in a private `GLOBAL_VALUE_FLAGS: Record<string, ReadonlySet<string>>` table. When the next token starts with `-` and matches an entry in the tool's set, `resolveFlags` consumes the FOLLOWING token as the flag's value (whether literal or dynamic) and excludes it from `args`. Unlisted tools fall back to the legacy "every `-X` is boolean" behavior — no regression for code that wasn't on the affected paths.
+`resolveFlags(call)` looks up `call.cmd` in a private `GLOBAL_VALUE_FLAGS: Record<string, ReadonlySet<string>>` table.
+When the next token starts with `-` and matches an entry in the tool's set, `resolveFlags` consumes the FOLLOWING
+token as the flag's value (whether literal or dynamic) and excludes it from `args`. Unlisted tools fall back to
+the legacy "every `-X` is boolean" behavior — no regression for code that wasn't on the affected paths.
 
 Verified shapes (test fixtures in `tests/global-flags.test.ts`):
 
@@ -62,7 +75,9 @@ Verified shapes (test fixtures in `tests/global-flags.test.ts`):
 
 1. **`-Cvalue` (concatenated short form) is not consumed** — only the space-separated `-C value` form. `git -C/tmp` still parses with `-C/tmp` as a single literal flag token.
 2. **Tool name match is exact** — `git` looks up the table; `/usr/bin/git` does not. Consumers using full paths should normalize first.
-3. **`xargs cmd args…` boundary not detected** — `resolveFlags` consumes `-I {} -n 1` correctly, but does not know that the rest of the line is xargs's command-to-run, so `-rf` gets expanded as combined short flags. Consumers needing inner-cmd-as-a-unit should locate the first non-flag arg and slice from there.
+3. **`xargs cmd args…` boundary not detected** — `resolveFlags` consumes `-I {} -n 1` correctly, but does not
+   know that the rest of the line is xargs's command-to-run, so `-rf` gets expanded as combined short flags.
+   Consumers needing inner-cmd-as-a-unit should locate the first non-flag arg and slice from there.
 4. **Dynamic values are silently consumed**, not exposed in a separate `flagValues` map. `git -C "$DIR" worktree add` produces `flags: ["-C"], args: ["worktree", "add"]`. Tracking flag-value pairs (literal or DYNAMIC) is deferred to v0.5.0.
 
 ### Original design space (preserved for context)
@@ -99,15 +114,31 @@ function resolveFlags(call: CallExprNode): UnwrappedCall {
 ### Why "at the top of BUGS.md"
 
 This sits above BUG-001 (WASM path) because:
+
 - BUG-001 has a known fix path (lazy WASM resolution); this one needs a design decision.
-- Consumers can workaround BUG-001 (don't `bun build --compile`); they cannot workaround this without rebuilding the same per-tool table client-side, which is exactly the scope-blow-up we're trying to avoid.
-- It's the closest the shell-ast → hook-kit → ai-guardrails stack has to a quiet-bypass class of bug. Worth surfacing first to readers.
+- Consumers can workaround BUG-001 (don't `bun build --compile`); they cannot workaround this without rebuilding
+  the same per-tool table client-side, which is exactly the scope-blow-up we're trying to avoid.
+- It's the closest the shell-ast → hook-kit → ai-guardrails stack has to a quiet-bypass class of bug.
+  Worth surfacing first to readers.
 
 ---
 
 ## BUG-001: WASM path baked at compile time breaks `bun build --compile`
 
-**Status:** OPEN (workaround documented). The `bun build --compile` standalone-binary path is validated in CI by `tests/smoke/run-compile-smoke.sh`; the consumer-side workaround is in [§ Workaround until fix lands](#workaround-until-fix-lands) below.
+**Status:** FIXED in v0.2.1. `src/wasm.ts` imports the WASM via `with { type: "file" }` and then
+re-anchors any *relative* result against `dirname(fileURLToPath(import.meta.url))` — the
+`const wasmPath = isAbsolute(wasmAsset) ? wasmAsset : join(here, wasmAsset.replace(/^\.\//, ""))`
+guard, with `here = dirname(fileURLToPath(import.meta.url))`. The combination resolves correctly
+in all three modes: dev (`bun run`/`bun test` on `src/`), consumer-install (relative literal
+re-anchored against `dist/index.js`'s dir), and `bun build --compile` (absolute `$bunfs/` path
+passed through untouched). `with { type: "file" }` *alone* was the v0.2.0 regression (gh #5 — the
+bundler emitted a CWD-relative literal on `--target node` that broke every consumer not running
+from `dist/`); the `fileURLToPath` re-anchoring is the v0.2.1 fix. Verified by
+`tests/smoke/run-compile-smoke.sh`, which (1) builds a standalone binary, (2) copies it OUT of the
+build tree to a tmp path, (3) moves `dist/` + `src/wasm_exec.js` aside, and (4) parses a known
+input from `/` — the exact cross-location failure mode BUG-001 described. Smoke ran green locally
+(2026-06-05 on feat/v0.8.0-consumer-hardening @ 9994438). The proposed `with { type: "wasm" }`
+rewrite below was NOT taken.
 
 **Severity:** CRITICAL — silently breaks all consumers that compile a binary.
 
@@ -181,7 +212,7 @@ Bun's import attributes are honored both in dev (resolves to file content at
 module-load) and in `bun build --compile` (embeds the asset into the compiled
 binary). Same code in script mode and binary mode, no conditional logic.
 
-**Reference:** Bun bundler docs on import attributes — https://bun.com/docs/bundler/loaders
+**Reference:** [Bun bundler docs on import attributes](https://bun.com/docs/bundler/loaders)
 
 ### Tarball impact
 
@@ -224,7 +255,7 @@ distribution (CI build → user install) is broken until BUG-001 is resolved.
 
 ---
 
-# Feature requests & API ergonomics
+## Feature requests & API ergonomics
 
 The entries below were captured 2026-05-13 during a hook-kit ↔ ai-guardrails
 integration session. They aren't bugs in the strict sense — shell-ast 0.2.1
@@ -236,7 +267,9 @@ to `~/Projects/hook-kit` at the time of writing.
 
 ## BUG-002: `unwrapCall` returns `null` for bare wrapper invocations
 
-**Status:** FIXED in v0.3.0. Bare wrapper invocations (`bash`, `bash --version`, the RHS of `curl … | bash`) now resolve to `{ kind: "plain" }` instead of `null` — see `src/wrappers/unwrap.ts` "Wrapper-named but no inner command found" branch. Shipped as part of the discriminated-union break alongside BUG-003.
+**Status:** FIXED in v0.3.0. Bare wrapper invocations (`bash`, `bash --version`, the RHS of `curl … | bash`) now
+resolve to `{ kind: "plain" }` instead of `null` — see `src/wrappers/unwrap.ts` "Wrapper-named but no inner
+command found" branch. Shipped as part of the discriminated-union break alongside BUG-003.
 
 **Severity:** HIGH — forces every consumer to ship a `resolveFlags` fallback.
 
@@ -337,6 +370,10 @@ Worth bundling with BUG-002's fix as a single breaking 0.3.0 release.
 ---
 
 ## BUG-004: `wordToLit` is binary — needs a "give me what you can" variant
+
+**Status:** FIXED in v0.3.0. `wordToParts(w): ArgFragment[]` ships the literal-vs-dynamic decomposition
+(never null); `wordToLit` is the convenience wrapper over it that returns `null` when any fragment is dynamic.
+See `src/flags.ts`.
 
 **Severity:** HIGH for security consumers.
 
@@ -500,11 +537,18 @@ event.
 
 ## BUG-008: `unwrapDeep(call)` for chained wrappers
 
-**Status:** FIXED in v0.7.0 (2026-05-18). Closes [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11). See [`docs/plans/v0.7.0.md`](./plans/v0.7.0.md) for the locked design + the four BUG-008-postmortem lessons in session memory (`feedback_user_is_the_consumer.md` extended, `feedback_dont_conflate_deferred_with_rejected.md`, `feedback_verify_escape_hatch_claims.md`, `feedback_asymmetric_variant_classification.md`).
+**Status:** FIXED in v0.7.0 (2026-05-18). Closes [#11](https://github.com/Questi0nM4rk/shell-ast/issues/11).
+See [`docs/plans/v0.7.0.md`](./plans/v0.7.0.md) for the locked design + the four BUG-008-postmortem
+lessons in session memory (`feedback_user_is_the_consumer.md` extended,
+`feedback_dont_conflate_deferred_with_rejected.md`, `feedback_verify_escape_hatch_claims.md`,
+`feedback_asymmetric_variant_classification.md`).
 
 **Severity:** MEDIUM — correctness gap for layered wrappers.
 
-**Reported:** 2026-05-13. Deferred in v0.5.0 (rationale: "unwrapCallParsed + findCalls cover this manually") and v0.6.0 (rationale: "hook-kit's recurseInlineShells covers `sudo bash -c \"rm\"`" — this claim was wrong; recurseInlineShells fires only on `wrapped-script`, not on `wrapped` with shell inner). Hook-kit filed #11 2026-05-18 with the asymmetry argument that closed it.
+**Reported:** 2026-05-13. Deferred in v0.5.0 (rationale: "unwrapCallParsed + findCalls cover this manually")
+and v0.6.0 (rationale: "hook-kit's recurseInlineShells covers `sudo bash -c \"rm\"`" — this claim was wrong;
+recurseInlineShells fires only on `wrapped-script`, not on `wrapped` with shell inner). Hook-kit filed #11
+2026-05-18 with the asymmetry argument that closed it.
 
 **Symptom:** `sudo bash -c 'rm -rf /'` is three semantic layers: sudo wraps
 bash wraps an opaque script. Today `unwrapCall` peels one layer. The
@@ -600,7 +644,7 @@ break; pure additive.
 
 ---
 
-# Priority ranking
+## Priority ranking
 
 For a hook-kit cleanup pass, the highest-leverage items are:
 
@@ -615,4 +659,3 @@ For a hook-kit cleanup pass, the highest-leverage items are:
 BUG-006 through BUG-010 are quality-of-life — each removes a small amount
 of consumer boilerplate or unlocks an optimization, but none are
 load-bearing the way 002–005 are.
-
