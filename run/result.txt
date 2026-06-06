@@ -1,0 +1,5 @@
+The workflow completed. Here is its return value verbatim as JSON:
+
+```json
+{"ok":true,"mode":"answer","answer":"The diff raises the job-level timeout from 30 to 60 minutes in both cc-review.yml and cc-review-interactive.yml. The commenter is making an analytical observation about the risk: doubling the ceiling doubles the worst-case billable runner time per review, and the change does not address the underlying cause of slowness in the runtime-clone pipeline. A genuinely hung job now runs for up to 60 minutes before GitHub cancels it instead of 30.","posted":true}
+```
