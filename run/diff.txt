@@ -1,0 +1,13 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index eb72c4f..ce2c407 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -15,7 +15,7 @@ jobs:
+     timeout-minutes: 10
+ 
+     steps:
+-      - uses: actions/checkout@v5
++      - uses: actions/checkout@v6
+ 
+       - uses: actions/setup-go@v6
+         with:

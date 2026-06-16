@@ -1,0 +1,1 @@
+Use the Workflow tool with scriptPath '/tmp/cc-review-bot/.claude/workflows/strict-review.mjs' and args { bot_dir: '/tmp/cc-review-bot' }. Run it to completion and report its return value verbatim as JSON. The workflow reads PR number, repo, post-flag, and project config from /tmp/cc-input.json, /tmp, and .cc-review.yaml.
