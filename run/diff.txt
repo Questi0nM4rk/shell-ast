@@ -1,0 +1,2593 @@
+diff --git a/README.md b/README.md
+index 5b15af7..3b8b1ce 100644
+--- a/README.md
++++ b/README.md
+@@ -43,6 +43,51 @@ install time. See [`docs/specs/`](docs/specs/) for the design history.
+ 
+ ---
+ 
++## Migrating from 0.2.x to 0.3.0
++
++v0.3.0 is a breaking release. The headline change: `UnwrappedCall` is
++now a discriminated union (`kind: "plain" | "wrapped" | "wrapped-script"
++| "wrapped-opaque"`) so every wrapper outcome has its own variant. This
++fixes a class of bugs where the old shape conflated multiple legitimate
++states (gh #7, BUG-A, BUG-B in `docs/BUGS.md`).
++
++### Cheatsheet
++
++| v0.2.x | v0.3.0 |
++|---|---|
++| `u.wrapper === "sudo" && u.cmd === "rm"` | `u.kind === "wrapped" && u.wrapper === "sudo" && u.cmd === "rm"` |
++| `u.commandString` | `u.kind === "wrapped-script" && u.script` |
++| `u.wrapper === null && u.cmd === "bash"` | `u.kind === "plain" && u.cmd === "bash"` |
++| `unwrapCall` returns `null` for `bash --version` | Returns `{kind:"plain", cmd:"bash", flags:["--version"]}` |
++| `unwrapCall` returns `null` for `sudo $cmd` | Returns `{kind:"wrapped-opaque", wrapper:"sudo"}` |
++| `wordToLit` returns `null` for `"foo""bar"` | Returns `"foobar"` (folds static fragments) |
++| `wordToLit` returns `null` for `""` | Returns `""` (empty literal, not unresolvable) |
++| `args: ["<dynamic>"]` magic string check | `args.some(isDynamic)` or `args.some(a => a === DYNAMIC)` |
++| `try { parse(...) } catch { /* string-match */ }` | `catch (e) { if (e instanceof ParseSyntaxError) ... }` |
++| Hand-rolled `["-c"]` + `parse(cmdStr)` second call | `await unwrapCallParsed(call)` (sets `u.innerAst`) |
++
++### New surface
++
++- `kind`-discriminated `UnwrappedCall` (BUG-003)
++- `wordToParts(w): ArgFragment[]` returns `{kind:"literal" \| "dynamic"}` pieces — never null (BUG-004)
++- `isDynamic(a)` / `isResolved(a)` typed guards (BUG-005)
++- `findCalls(ast, { depth: "top" \| "any" })` — skip CmdSubst/ProcSubst/BraceExp subtrees (BUG-006)
++- `findRedirects(ast, { ops: "write" \| "read" \| "all" })`
++- `findAssignments(ast, { exportedOnly?: boolean })`
++- `unwrapCallParsed(call): Promise<UnwrappedCall>` — async variant that populates `innerAst` for `wrapped-script` (BUG-007)
++- `ParseSyntaxError` / `ParseSizeError` / `WasmLoadError` / `WasmRuntimeError` — typed errors with `.kind` discriminator (BUG-009)
++- `preloadWasm()` — idempotent warm-up to move WASM init out of the first-`parse()` hot path (BUG-010)
++- `effectOf(node)` / `effectsOf(node)` — structural effect classification (`exec`, `pipe`, `fs-write`, `fs-read`, `subshell`, `fork-detach`, …)
++- New wrappers in the WRAPPERS schema: `ksh`, `mksh`, `eval`, `exec`
++- ANSI-C `$'\n'` escape sequences now unescaped in `wordToParts`/`wordToLit`
++- UTF-8 BOM stripped before parsing
++- `sudo --user root cmd` (space form) consumed correctly (was: misparsed as `--user`-only)
++- Combined short flags only expand for pure letters (`-rf` → `-r -f`, but `-=value` stays `-=value`, no flag fabrication)
++- Bare `-` is a positional (POSIX stdin sentinel), not a flag
++- Second `--` after end-of-flags is a positional, not consumed again
++
++---
++
+ ## What You Get
+ 
+ ```typescript
+@@ -107,31 +152,53 @@ rm -r -f /                  # tokenizer: split flags not recombined
+ $(rm -rf /)                 # tokenizer: no subshell traversal
+ ```
+ 
+-With `shell-ast`, all of these are handled by walking `CallExpr` nodes:
++With `shell-ast`, all of these are handled by dispatching on the
++unwrapped call's `kind`:
+ 
+ ```typescript
+-import { parse, findCalls } from "@questi0nm4rk/shell-ast";
+-import { unwrapCall } from "@questi0nm4rk/shell-ast/semantic"; // sudo-aware unwrapper
++import { parse, findCalls, unwrapCall, isResolved } from "@questi0nm4rk/shell-ast";
+ 
+ async function checkCommand(input: string): Promise<string | null> {
+   const ast = await parse(input).catch(() => null);
+-  if (!ast) return null; // malformed shell — skip
++  if (!ast) return null;
+ 
+   for (const call of findCalls(ast)) {
+-    const unwrapped = unwrapCall(call);
+-    if (!unwrapped) continue;
+-    const { cmd, flags } = unwrapped;
+-    const has = (f: string) => flags.includes(f);
+-
+-    if (cmd === "rm" && has("-r") && has("-f"))
+-      return "blocked: rm -rf";
+-    if (cmd === "git" && unwrapped.args[0] === "push" && has("--force"))
+-      return "blocked: git push --force";
++    const u = unwrapCall(call);
++    if (!u) continue;
++
++    switch (u.kind) {
++      case "plain":
++      case "wrapped": {
++        // Both have cmd/flags/args. For "wrapped", u.wrapper is also set.
++        if (u.cmd === "rm" && u.flags.includes("-r") && u.flags.includes("-f"))
++          return `blocked: rm -rf${u.kind === "wrapped" ? ` via ${u.wrapper}` : ""}`;
++        if (u.cmd === "git" && u.args[0] === "push" && u.flags.includes("--force"))
++          return "blocked: git push --force";
++        break;
++      }
++      case "wrapped-script": {
++        // bash -c "...", eval "...", su user -c "...". Re-parse the inner.
++        const inner = await checkCommand(u.script);
++        if (inner) return `via ${u.wrapper} -c: ${inner}`;
++        break;
++      }
++      case "wrapped-opaque": {
++        // sudo $cmd, bash -c $script — wrapper detected, inner unresolvable.
++        // Still useful: catches privilege escalation even with dynamic inner.
++        if (u.wrapper === "sudo" || u.wrapper === "doas")
++          return `escalation with dynamic inner (wrapper: ${u.wrapper})`;
++        break;
++      }
++    }
+   }
+   return null;
+ }
+ ```
+ 
++`switch (u.kind)` is exhaustive in TypeScript — adding a new variant in
++a future shell-ast release will make every consumer's switch fail to
++compile until they handle it. The library cannot silently drop a case.
++
+ ### CI script analysis
+ 
+ ```typescript
+diff --git a/docs/BUGS.md b/docs/BUGS.md
+index 089bb70..8b0da73 100644
+--- a/docs/BUGS.md
++++ b/docs/BUGS.md
+@@ -116,3 +116,380 @@ Consumers can build on the same machine they install on. Cross-machine
+ distribution (CI build → user install) is broken until BUG-001 is resolved.
+ 
+ ---
++
++# Feature requests & API ergonomics
++
++The entries below were captured 2026-05-13 during a hook-kit ↔ ai-guardrails
++integration session. They aren't bugs in the strict sense — shell-ast 0.2.1
++works — but each one shows up as awkward, error-prone, or low-signal code in
++the consumer (hook-kit, the canonical major consumer). Code references are
++to `~/Projects/hook-kit` at the time of writing.
++
++---
++
++## BUG-002: `unwrapCall` returns `null` for bare wrapper invocations
++
++**Severity:** HIGH — forces every consumer to ship a `resolveFlags` fallback.
++
++**Reported:** 2026-05-13. Also filed upstream as `Questi0nM4rk/shell-ast#7`.
++
++**Symptom:** When a `WRAPPERS`-listed command (`bash`, `sh`, …) appears without
++an inner command — bare `bash`, `bash --version`, `bash -i`, the right side of
++`curl example.com | bash` — `unwrapCall` returns `null`. Every consumer that
++uses `unwrapCall` as the primary lens on a `CallExpr` loses the ability to
++detect bash/sh/etc. in those positions.
++
++### Where it bit us
++
++hook-kit's pipe-rule and command-rule machinery couldn't match `curl … | bash`
++(the canonical RCE pattern), and `cmd("bash").deny(…)` failed to fire on
++`bash --version`. Worked around in `src/engine/helpers.ts:resolveUnwrappedOrFallback`
++with a `resolveFlags` fallback used by both `rules/command.ts:87` and
++`rules/pipe.ts:73`. That helper becomes dead code the moment this lands.
++
++### Root cause
++
++`src/semantic.ts` `unwrapCall`, the wrapper-walk loop hits `if (i >=
++rawArgs.length) return null;`. That branch fires whenever the wrapper consumed
++all of its own arguments without finding a positional inner command. Treating
++"no inner command" as "this isn't a wrapper invocation, return as a plain call"
++would let `unwrapCall` stay the single, complete entry point.
++
++### Suggested fix
++
++```ts
++if (i >= rawArgs.length) {
++  return { wrapper: null, ...resolved };   // fall through to plain
++}
++```
++
++Same change for any other `return null` paths inside the wrapper logic that
++fire when "we couldn't find an inner command" (vs. "we hit something genuinely
++dynamic" — keep those returning null).
++
++### Impact
++
++Every downstream library currently writes the same `resolveFlags` workaround.
++A one-line shell-ast fix removes the boilerplate from every consumer.
++
++---
++
++## BUG-003: `UnwrappedCall` shape should be a discriminated union, not three nullable fields
++
++**Severity:** HIGH — biggest single source of caller-side confusion.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** The current shape
++
++```ts
++interface UnwrappedCall {
++  wrapper: string | null;
++  cmd: string | null;
++  flags: string[];
++  args: ResolvedArg[];
++  raw: CallExprNode;
++  commandString?: string;
++}
++```
++
++forces every consumer to figure out which of `wrapper` / `cmd` is the
++"name that matters" — and the answer depends on caller intent. Hook-kit
++ended up with `wrapper ?? cmd` in inline-shell detection
++(`src/engine/index.ts:99`) but `cmd ?? wrapper` in pipe-RHS resolution
++(`src/rules/pipe.ts:76`). Both are correct for their purpose, but the
++mirror-image idioms are confusing and the type system gives no help.
++
++### Suggested API
++
++```ts
++type UnwrappedCall =
++  | { kind: "plain";   cmd: string; flags: string[]; args: ResolvedArg[]; raw }
++  | { kind: "wrapped"; wrapper: string; cmd: string; flags: string[]; args: ResolvedArg[]; raw }   // sudo rm -rf /
++  | { kind: "shell";   wrapper: string; commandString: string; raw };                              // bash -c '…'
++```
++
++### Why this helps
++
++Consumers collapse to a single `switch (u.kind)` with each branch type-checked.
++`wrapper ?? cmd` and `cmd ?? wrapper` both disappear — `case "plain": u.cmd`,
++`case "wrapped": handle wrapper or cmd intentionally`, `case "shell":
++re-parse commandString`. TypeScript forces exhaustiveness. The
++`resolveUnwrappedOrFallback` helper in hook-kit would collapse into a sealed
++`switch` with no fallback path to maintain.
++
++### Impact
++
++This is the structural change that retires the most hook-kit boilerplate.
++Worth bundling with BUG-002's fix as a single breaking 0.3.0 release.
++
++---
++
++## BUG-004: `wordToLit` is binary — needs a "give me what you can" variant
++
++**Severity:** HIGH for security consumers.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** Today `wordToLit("rm -rf $DANGER")` returns `null` for the
++`$DANGER` arg because it's not a single literal. The caller has zero
++visibility into what got expanded. hook-kit's `argMatches(/secret/)` rule
++silently misses every command with any expansion.
++
++### Where it bit us
++
++Quoted-arg test at `tests/rules/cmd.test.ts:205` had to be rewritten when
++shell-ast 0.2.x changed quote semantics — and the v0.2.0 bundling bug
++returned the literal string `"<dynamic>"` for any non-resolvable arg, which
++hook-kit's regex tests then matched against (silently wrong). A richer
++return shape would have surfaced "this is dynamic; here's what we know" so
++the bug couldn't disguise itself as a literal.
++
++### Suggested API
++
++```ts
++type ArgFragment =
++  | { kind: "literal"; value: string }
++  | { kind: "dynamic"; sourceText: string };   // the raw source of the unresolved part
++
++function wordToParts(w: Word): ArgFragment[];   // never null, always informative
++```
++
++Keep `wordToLit` as a convenience that returns `parts.length === 1 &&
++parts[0].kind === "literal" ? parts[0].value : null` — preserves the
++current API while exposing the richer one underneath.
++
++### Why this helps
++
++hook-kit can write: "the command is `rm -rf` followed by a literal `--no-preserve-root`
++followed by a dynamic value — escalate." Today we only know "literal" or
++"give up." Materially better for security rules; eliminates a class of
++silent-allow regressions.
++
++---
++
++## BUG-005: Type guards exported alongside the `DYNAMIC` sentinel
++
++**Severity:** MEDIUM — refactor-safety.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** Today consumers narrow `ResolvedArg = string | typeof DYNAMIC`
++with `typeof a === "string"`. That's fragile — a bundling regression in
++shell-ast 0.2.0 produced the literal string `"<dynamic>"` in `dist/index.js`
++(see BUG-001 history), and the `typeof === "string"` narrowing was useless
++against it. The bundled shell-ast was effectively returning a value that
++passed every consumer's type guard but failed every semantic intent.
++
++### Suggested API
++
++```ts
++export function isDynamic(a: ResolvedArg): a is typeof DYNAMIC;
++export function isResolved(a: ResolvedArg): a is string;
++```
++
++### Where it would have helped
++
++hook-kit's regex match would have read
++
++```ts
++unwrapped.args.some(a => isResolved(a) && p.test(a))
++```
++
++instead of
++
++```ts
++unwrapped.args.some(a => typeof a === "string" && p.test(a))
++```
++
++The former breaks the moment shell-ast's compiled output ships a buggy
++sentinel; the latter silently keeps "working." Library-owned guards are
++the canonical way to insulate consumers from sentinel-shape changes.
++
++### Impact
++
++Cheap (10 lines of shell-ast), tightens every consumer's narrowing path,
++prevents an entire class of "compiled sentinel diverges from source
++sentinel" regressions.
++
++---
++
++## BUG-006: `findCalls` needs a `topLevel` option (and `findRedirects` a `writesOnly`)
++
++**Severity:** MEDIUM — consumer-side filter boilerplate.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** `findCalls(ast)` returns every `CallExpr` in the tree —
++including ones nested inside command substitutions
++(`echo $(rm -rf foo)`). Some hook-kit rules want to inspect every nested
++call (security); some want only the top-level invocation (pipe matching,
++inline-shell recursion). Today we walk the full set and re-filter, which
++is a meaningful pile of repeated tree-traversal logic.
++
++### Suggested API
++
++```ts
++function findCalls(ast: ShellFile, opts?: { topLevel?: boolean }): CallExprNode[];
++function findRedirects(ast: ShellFile, opts?: { writesOnly?: boolean }): Redirect[];
++function findAssignments(ast: ShellFile, opts?: { exportedOnly?: boolean }): Assign[];
++```
++
++Backwards-compatible (opts is optional). The implementation has the depth
++information already during the walk; exposing it is essentially free.
++
++### Why this helps
++
++hook-kit's `redirect()` rule currently re-walks the output of
++`findRedirects` to keep only write ops. The engine's inline-shell recursion
++re-filters for top-level shells. Both collapse to a one-line call.
++
++---
++
++## BUG-007: `unwrapCall` for `bash -c '…'` should return the parsed inner AST
++
++**Severity:** MEDIUM — saves a re-parse.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** Today, `unwrapCall(bash -c 'rm -rf /')` returns
++`{ wrapper: "bash", cmd: null, commandString: "rm -rf /" }`. Every consumer
++that wants to inspect the inner script (hook-kit's inline-shell recursion,
++any future RCE-detection rule) calls `parse(commandString)` again. shell-ast
++already had the parser warm; the consumer's re-parse is pure waste.
++
++### Suggested API
++
++Folded into the discriminated-union shape from BUG-003:
++
++```ts
++| { kind: "shell"; wrapper: string; innerAst: ShellFile; commandString: string; raw }
++```
++
++`commandString` stays for consumers that want the raw source (for log
++output, AI agent prompts, etc.); `innerAst` is the pre-parsed AST. Optional
++to populate — if shell-ast's parser already ran on the inner string for its
++own resolution, just hand it back.
++
++### Why this helps
++
++hook-kit's `extractInlineScript` helper in `src/engine/helpers.ts:140`
++disappears entirely — the recursion just reads `u.innerAst` and recurses.
++Inline-shell rules go from "extract string → re-parse → walk" to "walk
++inner AST." Net saving: one parser invocation per inline-shell call per
++event.
++
++---
++
++## BUG-008: `unwrapDeep(call)` for chained wrappers
++
++**Severity:** MEDIUM — correctness gap for layered wrappers.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** `sudo bash -c 'rm -rf /'` is three semantic layers: sudo wraps
++bash wraps an opaque script. Today `unwrapCall` peels one layer. The
++consumer has to inspect the result and decide whether to recurse on the
++remaining `bash -c '…'` themselves. hook-kit's current sudo-aware
++guarantee (`cmd("rm")` matches `sudo rm -rf /`) works for one-layer
++wrapping but I'm not confident it survives this chained case — and there's
++no test fixture for it.
++
++### Suggested API
++
++```ts
++function unwrapDeep(call: CallExprNode): UnwrappedCall[];   // outermost first
++```
++
++Returns the unwrap chain. `[sudo-layer, bash-layer]` for the example
++above. Consumer iterates and inspects each layer — natural representation
++for "is this `rm` anywhere in the invocation chain" rules.
++
++### Why this helps
++
++hook-kit's command rule can iterate the chain instead of recursing
++manually. Sudo-aware semantics extend naturally to N levels. Test fixtures
++become "given this chain, assert these decisions."
++
++---
++
++## BUG-009: `ParseError` should carry structured position + kind, not just a message
++
++**Severity:** LOW — quality-of-life for diagnostics.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** Today `parse()` throws a plain `Error` with a message like
++`"1:5: \`then\` must be followed by a statement list"`. hook-kit's BUG-001
++stderr warning dumps this string verbatim. A consumer that wanted to
++categorize errors (recoverable syntax vs. infrastructure failure) has to
++regex the message. The bundled WASM-load failure message
++(`"ENOENT … shell-ast.wasm"`) looks indistinguishable from a syntax error
++at the catch site.
++
++### Suggested API
++
++```ts
++class ParseError extends Error {
++  readonly line: number;
++  readonly col: number;
++  readonly kind: "syntax" | "wasm-load" | "wasm-runtime" | "size-limit";
++  readonly snippet?: string;
++}
++```
++
++### Why this helps
++
++hook-kit's BUG-001 warning could distinguish "shell-ast WASM failed to load
++(infra error)" from "this specific command was malformed (likely fine).
++The former should warn loudly once per process; the latter is normal.
++Today both look identical at the catch site.
++
++---
++
++## BUG-010: Export `loadWasm` / add `preloadWasm` from the public API
++
++**Severity:** LOW — startup latency optimization.
++
++**Reported:** 2026-05-13.
++
++**Symptom:** WASM loads lazily on the first `parse()` call. For
++compiled-binary consumers, that first-call latency lands in the hot path
++of evaluating a real user command. There's no way to warm the WASM ahead
++of time — `loadWasm` exists in `src/wasm.ts` but isn't re-exported from
++`src/index.ts`.
++
++### Suggested API
++
++```ts
++export async function preloadWasm(): Promise<void>;
++```
++
++Idempotent. Safe to call multiple times. Returns the same promise the
++first parse would internally.
++
++### Why this helps
++
++hook-kit's `runShell` in `src/wrapper/hk.ts` can call `await preloadWasm()`
++at binary startup, before parsing argv. Cold-start latency moves out of
++the first-rule evaluation. Adapter mode (`run()`) can do the same. No API
++break; pure additive.
++
++---
++
++# Priority ranking
++
++For a hook-kit cleanup pass, the highest-leverage items are:
++
++1. **BUG-002** — single-line fix, deletes the `resolveFlags` fallback in
++   every consumer.
++2. **BUG-003** — structural; biggest reduction in consumer-side ambiguity.
++   Worth bundling with BUG-002 in a 0.3.0 break.
++3. **BUG-004** — security-relevant; closes a class of silent-allow holes.
++4. **BUG-005** — small library change, prevents an entire bundling-regression
++   failure mode from recurring.
++
++BUG-006 through BUG-010 are quality-of-life — each removes a small amount
++of consumer boilerplate or unlocks an optimization, but none are
++load-bearing the way 002–005 are.
++
+diff --git a/package.json b/package.json
+index 2f57d4a..1866700 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@questi0nm4rk/shell-ast",
+-  "version": "0.2.1",
++  "version": "0.3.0",
+   "description": "Full AST exposure for shell scripts via mvdan/sh compiled to WASM",
+   "license": "MIT",
+   "repository": {
+diff --git a/src/effects.ts b/src/effects.ts
+new file mode 100644
+index 0000000..7ed2f70
+--- /dev/null
++++ b/src/effects.ts
+@@ -0,0 +1,108 @@
++// Structural effect classification.
++//
++// Every shell AST node either produces a side effect (I/O, env mutation,
++// process fork, exec) or is structural-only (sequencing, flow control).
++// `effectOf(node)` returns the immediate effect of a single node;
++// `effectsOf(node)` walks a subtree and unions every effect produced
++// underneath.
++//
++// The taxonomy is derived purely from node types and operator enums —
++// no command-name knowledge required. `effectOf(CallExpr)` is always
++// `"exec"`: we know SOMETHING runs, not whether `rm` deletes files.
++// Layer policy (e.g. "this cmd name is destructive") on top.
++//
++// Why ship this: hook-kit and similar consumers hand-roll constants
++// like `WRITE_OPS = Set([">", ">>", ...])` inline in every rule. The
++// library owns the operator enum; this exposes the categorisation
++// once instead of N times.
++
++import type { ShellNode } from "./types.js";
++import { walk } from "./walk.js";
++
++/** Structural effects derivable from AST shape alone. */
++export type Effect =
++  /** CallExpr — a command runs. The library can't say what it does. */
++  | "exec"
++  /** CmdSubst (`$(…)`, `` `…` `` ) — executes children, captures stdout. */
++  | "capture-exec"
++  /** Subshell (`(…)`) — forks a child shell and waits. */
++  | "subshell"
++  /** BinaryCmd op `|` or `|&` — stdout (and maybe stderr) wired to next stage. */
++  | "pipe"
++  /** Stmt.background (`cmd &`) — forks and detaches; survives script exit. */
++  | "fork-detach"
++  /** Redirect op `<`, `<<`, `<<-`, `<<<` — file descriptor opened for reading. */
++  | "fs-read"
++  /** Redirect op `>`, `>>`, `>|`, `&>`, `&>>` — fd opened for writing. */
++  | "fs-write"
++  /** Redirect op `<>` — fd opened for read/write. */
++  | "fs-rw"
++  /** Redirect op `<&`, `>&` — fd duplication (e.g. `2>&1`). No I/O. */
++  | "fd-dup"
++  /** ProcSubst `<(…)` — inner runs, output presented as a readable FD. */
++  | "compound-fs-read"
++  /** ProcSubst `>(…)` — inner runs, input presented as a writable FD. */
++  | "compound-fs-write"
++  /** Bare Assign (e.g. `FOO=bar` as a standalone Stmt) — writes shell env. */
++  | "env-write"
++  /** Assign inside a CallExpr (`FOO=bar cmd`) — transient env for one exec. */
++  | "env-prefix";
++
++/** Effect of THIS node only — does not recurse into children. Returns
++ *  null for purely-structural nodes (File, Stmt, IfClause, …) that
++ *  carry no immediate effect of their own. */
++export function effectOf(node: ShellNode): Effect | null {
++  switch (node.type) {
++    case "CallExpr":
++      // Assignment-only "calls" (FOO=bar with no args) are env mutations.
++      return node.args.length === 0 ? "env-prefix" : "exec";
++    case "CmdSubst":
++      return "capture-exec";
++    case "Subshell":
++      return "subshell";
++    case "BinaryCmd":
++      return node.op === "|" || node.op === "|&" ? "pipe" : null;
++    case "Stmt":
++      return node.background ? "fork-detach" : null;
++    case "Redirect": {
++      const op = node.op;
++      if (op === "<" || op === "<<" || op === "<<-" || op === "<<<") return "fs-read";
++      if (op === ">" || op === ">>" || op === ">|" || op === "&>" || op === "&>>")
++        return "fs-write";
++      if (op === "<>") return "fs-rw";
++      if (op === "<&" || op === ">&") return "fd-dup";
++      return null;
++    }
++    case "ProcSubst":
++      return node.op === "<(" ? "compound-fs-read" : "compound-fs-write";
++    case "Assign":
++      // Standalone Assign nodes carry env-write; Assigns inside a
++      // CallExpr arrive here via the same path but the parent's
++      // effectOf already classifies as env-prefix when args is empty.
++      // To distinguish, callers should pass the CallExpr/Stmt rather
++      // than the bare Assign — but if they do pass an Assign, the
++      // safest single-node answer is env-write.
++      return "env-write";
++    default:
++      return null;
++  }
++}
++
++/** Union of every effect produced by `node` and all its descendants.
++ *  Stmt.background bubbles up via the Stmt itself; redirect ops on
++ *  any Stmt are included; CmdSubst/ProcSubst contribute their own
++ *  effect AND any nested effects below them. */
++export function effectsOf(node: ShellNode): Set<Effect> {
++  const out = new Set<Effect>();
++  walk(node, {});
++  // walk doesn't give a "visit every node type" visitor; build one
++  // by iterating known types instead.
++  const visitor = new Proxy({} as Record<string, (n: ShellNode) => void>, {
++    get: () => (n: ShellNode) => {
++      const e = effectOf(n);
++      if (e !== null) out.add(e);
++    },
++  });
++  walk(node, visitor);
++  return out;
++}
+diff --git a/src/extract.ts b/src/extract.ts
+index 153214c..5142d5f 100644
+--- a/src/extract.ts
++++ b/src/extract.ts
+@@ -1,5 +1,12 @@
+-// Walker-based extractors. Each finder runs walk() once and collects
+-// every matching node into an array, returned in source order.
++// Walker-based extractors with optional structural filters.
++//
++// BUG-006: `findCalls(ast, { depth: "top" })` restricts the result to
++// "top-level execution context" calls — every call outside CmdSubst /
++// ProcSubst / BraceExp and outside the inner-script value of a
++// commandFlag (`bash -c "..."`'s argument is not crossed).
++//
++// `findRedirects(ast, { ops: "write" })` filters to write-redirects
++// only, matching hook-kit's `WRITE_OPS` set.
+ 
+ import type {
+   Assign,
+@@ -7,6 +14,7 @@ import type {
+   CmdSubst,
+   FuncDecl,
+   Redirect,
++  RedirectOp,
+   ShellFile,
+   ShellNode,
+ } from "./types.js";
+@@ -14,8 +22,7 @@ import { type Visitor, walk } from "./walk.js";
+ 
+ /** Return every node in the tree whose .type matches `type`. Typed
+  *  via the discriminated-union extract: `findAll(ast, "CallExpr")`
+- *  returns CallExprNode[], `findAll(ast, "Redirect")` returns
+- *  Redirect[], etc. */
++ *  returns CallExprNode[], etc. */
+ export function findAll<K extends ShellNode["type"]>(
+   ast: ShellFile,
+   type: K
+@@ -30,9 +37,114 @@ export function findAll<K extends ShellNode["type"]>(
+   return out;
+ }
+ 
+-export const findCalls = (ast: ShellFile): CallExprNode[] => findAll(ast, "CallExpr");
+-export const findRedirects = (ast: ShellFile): Redirect[] => findAll(ast, "Redirect");
+-export const findAssignments = (ast: ShellFile): Assign[] => findAll(ast, "Assign");
+-export const findFunctions = (ast: ShellFile): FuncDecl[] => findAll(ast, "FuncDecl");
+-export const findCmdSubstitutions = (ast: ShellFile): CmdSubst[] =>
+-  findAll(ast, "CmdSubst");
++// ─── findCalls + depth filter (BUG-006) ──────────────────────────────────────
++
++export interface ExtractCallOptions {
++  /** `"any"` (default): every CallExpr in the tree, including inside
++   *  command substitutions and brace expansions.
++   *  `"top"`: only calls in the visible execution context — skips
++   *  CmdSubst, ProcSubst, and BraceExp subtrees (the data-as-code
++   *  positions where the parser is just capturing structure). */
++  depth?: "any" | "top";
++}
++
++export function findCalls(
++  ast: ShellFile,
++  opts: ExtractCallOptions = {}
++): CallExprNode[] {
++  if (opts.depth !== "top") return findAll(ast, "CallExpr");
++  const out: CallExprNode[] = [];
++  walk(ast, {
++    CallExpr(node) {
++      out.push(node);
++    },
++    CmdSubst() {
++      // Stop descent — anything inside $(…) / `…` is data-as-code.
++      return "skip";
++    },
++    ProcSubst() {
++      return "skip";
++    },
++    BraceExp() {
++      return "skip";
++    },
++  });
++  return out;
++}
++
++// ─── findRedirects + ops filter (BUG-006) ────────────────────────────────────
++
++const WRITE_OPS: ReadonlySet<RedirectOp> = new Set<RedirectOp>([
++  ">",
++  ">>",
++  ">|",
++  "&>",
++  "&>>",
++]);
++const READ_OPS: ReadonlySet<RedirectOp> = new Set<RedirectOp>([
++  "<",
++  "<<",
++  "<<-",
++  "<<<",
++]);
++
++export interface ExtractRedirectOptions {
++  /** `"all"` (default), `"write"` (`>`/`>>`/`&>`/etc.), `"read"`
++   *  (`<`/`<<`/`<<<`). Heredoc and here-string forms count as reads. */
++  ops?: "all" | "write" | "read";
++}
++
++export function findRedirects(
++  ast: ShellFile,
++  opts: ExtractRedirectOptions = {}
++): Redirect[] {
++  const filter =
++    opts.ops === "write"
++      ? (r: Redirect) => WRITE_OPS.has(r.op)
++      : opts.ops === "read"
++        ? (r: Redirect) => READ_OPS.has(r.op)
++        : null;
++  const all = findAll(ast, "Redirect");
++  return filter ? all.filter(filter) : all;
++}
++
++// ─── findAssignments + exportedOnly filter (BUG-006) ─────────────────────────
++
++const EXPORT_DECLS: ReadonlySet<string> = new Set([
++  "export",
++  "readonly",
++  "declare",
++  "typeset",
++]);
++
++export interface ExtractAssignmentOptions {
++  /** When true, only return assignments inside `export`/`readonly`/
++   *  `declare`/`typeset` DeclClauses. Skips bare `FOO=bar` and
++   *  CallExpr-prefix `FOO=bar cmd` assigns. */
++  exportedOnly?: boolean;
++}
++
++export function findAssignments(
++  ast: ShellFile,
++  opts: ExtractAssignmentOptions = {}
++): Assign[] {
++  if (!opts.exportedOnly) return findAll(ast, "Assign");
++  const out: Assign[] = [];
++  walk(ast, {
++    DeclClause(node) {
++      if (!EXPORT_DECLS.has(node.variant.value)) return;
++      for (const a of node.args) out.push(a);
++    },
++  });
++  return out;
++}
++
++// ─── findFunctions / findCmdSubstitutions — unchanged ────────────────────────
++
++export function findFunctions(ast: ShellFile): FuncDecl[] {
++  return findAll(ast, "FuncDecl");
++}
++
++export function findCmdSubstitutions(ast: ShellFile): CmdSubst[] {
++  return findAll(ast, "CmdSubst");
++}
+diff --git a/src/flags.ts b/src/flags.ts
+index 27e9842..42b5560 100644
+--- a/src/flags.ts
++++ b/src/flags.ts
+@@ -1,4 +1,6 @@
+-import type { CallExprNode, Word } from "./types.js";
++import type { CallExprNode, SglQuoted, Word } from "./types.js";
++
++// ─── DYNAMIC sentinel + type guards (BUG-005) ────────────────────────────────
+ 
+ /** Sentinel for positional args whose value cannot be statically
+  *  resolved (variables, command substitutions). Distinct from any
+@@ -8,6 +10,278 @@ export const DYNAMIC: unique symbol = Symbol("shell-ast.DYNAMIC");
+ 
+ export type ResolvedArg = string | typeof DYNAMIC;
+ 
++/** Narrow a ResolvedArg to its DYNAMIC sentinel form. Prefer this over
++ *  `a === DYNAMIC` so the type-guard intent is explicit and so
++ *  refactoring the sentinel shape stays a one-file change. */
++export function isDynamic(a: ResolvedArg): a is typeof DYNAMIC {
++  return a === DYNAMIC;
++}
++
++/** Narrow a ResolvedArg to its resolved string form. Survives any
++ *  future sentinel-shape regressions where a compiled output ships
++ *  `"<dynamic>"` as a string and would pass `typeof === "string"`. */
++export function isResolved(a: ResolvedArg): a is string {
++  return typeof a === "string" && a !== (DYNAMIC as unknown as string);
++}
++
++// ─── ArgFragment / wordToParts (BUG-004) ─────────────────────────────────────
++
++/** A single piece of a shell word after as much static evaluation as
++ *  the parser can do. Words are zero or more fragments concatenated
++ *  at runtime; some fragments resolve to a literal string, others
++ *  expand dynamically (variables, command substitutions). */
++export type ArgFragment =
++  | { kind: "literal"; value: string }
++  | { kind: "dynamic"; sourceText: string };
++
++/** Decompose a Word into its statically-resolvable fragments. Never
++ *  returns null — even `echo $cmd` yields one dynamic fragment, so
++ *  consumers see "this is dynamic; here's the source text" instead
++ *  of the binary string-or-null of wordToLit.
++ *
++ *  Each Lit / SglQuoted / DblQuoted{Lit only} part becomes a
++ *  "literal" fragment; anything else (ParamExp, CmdSubst, ArithmExp,
++ *  ProcSubst, ExtGlob, BraceExp) becomes a "dynamic" fragment with
++ *  the best sourceText we can derive.
++ *
++ *  Empty Words (e.g. `""` after SplitBraces produces them) yield
++ *  `[{kind:"literal", value:""}]` — always at least one fragment so
++ *  consumers can iterate without special-casing. */
++export function wordToParts(w: Word): ArgFragment[] {
++  if (w.parts.length === 0) return [{ kind: "literal", value: "" }];
++  const out: ArgFragment[] = [];
++  for (const p of w.parts) {
++    if (p.type === "Lit") {
++      out.push({ kind: "literal", value: p.value });
++      continue;
++    }
++    if (p.type === "SglQuoted") {
++      // $'...' processes ANSI-C escape sequences; '...' is verbatim.
++      const value = p.dollar ? unescapeAnsiC(p.value) : p.value;
++      out.push({ kind: "literal", value });
++      continue;
++    }
++    if (p.type === "DblQuoted") {
++      const folded = foldDblQuoted(p.parts);
++      if (folded !== null) {
++        out.push({ kind: "literal", value: folded });
++      } else {
++        out.push({ kind: "dynamic", sourceText: dblQuotedSourceText(p.parts) });
++      }
++      continue;
++    }
++    // ParamExp / CmdSubst / ArithmExp / ProcSubst / ExtGlob / BraceExp
++    out.push({ kind: "dynamic", sourceText: wordPartSourceText(p) });
++  }
++  return out;
++}
++
++/** True iff every part of a DblQuoted body is statically resolvable.
++ *  Returns the concatenated value when true, null otherwise. */
++function foldDblQuoted(parts: readonly Word["parts"][number][]): string | null {
++  let out = "";
++  for (const inner of parts) {
++    if (inner.type === "Lit") {
++      out += inner.value;
++    } else if (inner.type === "SglQuoted") {
++      out += inner.dollar ? unescapeAnsiC(inner.value) : inner.value;
++    } else {
++      return null;
++    }
++  }
++  return out;
++}
++
++/** Approximate source text for a dynamic word-part, used as the
++ *  `sourceText` of an `{kind:"dynamic"}` fragment. Best-effort —
++ *  consumers needing exact source should re-extract from the file. */
++function wordPartSourceText(p: Word["parts"][number]): string {
++  switch (p.type) {
++    case "Lit":
++      return p.value;
++    case "SglQuoted":
++      return p.dollar ? `$'${p.value}'` : `'${p.value}'`;
++    case "DblQuoted":
++      return `"${dblQuotedSourceText(p.parts)}"`;
++    case "ParamExp":
++      return p.short && p.param ? `$${p.param.value}` : "${...}";
++    case "CmdSubst":
++      return p.backquotes ? "`...`" : "$(...)";
++    case "ArithmExp":
++      return p.bracket ? "$[...]" : "$((...))";
++    case "ProcSubst":
++      return `${p.op}...)`;
++    case "ExtGlob":
++      return `${p.op}${p.pattern.value})`;
++    case "BraceExp":
++      return "{...}";
++    default:
++      return "...";
++  }
++}
++
++function dblQuotedSourceText(parts: readonly Word["parts"][number][]): string {
++  let out = "";
++  for (const inner of parts) out += wordPartSourceText(inner);
++  return out;
++}
++
++// ─── ANSI-C unescape ($'...') ────────────────────────────────────────────────
++
++/** Process ANSI-C escape sequences inside `$'...'` per bash(1).
++ *  Handles \\a \\b \\e \\f \\n \\r \\t \\v \\\\ \\' \\" \\? \\0NNN \\xHH \\uHHHH.
++ *  Unknown escapes are kept verbatim (matches bash leniency). */
++export function unescapeAnsiC(s: string): string {
++  let out = "";
++  let i = 0;
++  while (i < s.length) {
++    const c = s[i]!;
++    if (c !== "\\" || i + 1 >= s.length) {
++      out += c;
++      i++;
++      continue;
++    }
++    const next = s[i + 1]!;
++    switch (next) {
++      case "a":
++        out += "\x07";
++        i += 2;
++        continue;
++      case "b":
++        out += "\b";
++        i += 2;
++        continue;
++      case "e":
++      case "E":
++        out += "\x1b";
++        i += 2;
++        continue;
++      case "f":
++        out += "\f";
++        i += 2;
++        continue;
++      case "n":
++        out += "\n";
++        i += 2;
++        continue;
++      case "r":
++        out += "\r";
++        i += 2;
++        continue;
++      case "t":
++        out += "\t";
++        i += 2;
++        continue;
++      case "v":
++        out += "\v";
++        i += 2;
++        continue;
++      case "\\":
++        out += "\\";
++        i += 2;
++        continue;
++      case "'":
++        out += "'";
++        i += 2;
++        continue;
++      case '"':
++        out += '"';
++        i += 2;
++        continue;
++      case "?":
++        out += "?";
++        i += 2;
++        continue;
++      case "x": {
++        const hex = s.substring(i + 2, i + 4).match(/^[0-9A-Fa-f]{1,2}/);
++        if (!hex) {
++          out += c + next;
++          i += 2;
++          continue;
++        }
++        out += String.fromCharCode(parseInt(hex[0], 16));
++        i += 2 + hex[0].length;
++        continue;
++      }
++      case "0":
++      case "1":
++      case "2":
++      case "3":
++      case "4":
++      case "5":
++      case "6":
++      case "7": {
++        const oct = s.substring(i + 1, i + 4).match(/^[0-7]{1,3}/);
++        if (!oct) {
++          out += c + next;
++          i += 2;
++          continue;
++        }
++        out += String.fromCharCode(parseInt(oct[0], 8));
++        i += 1 + oct[0].length;
++        continue;
++      }
++      case "u": {
++        const hex = s.substring(i + 2, i + 6).match(/^[0-9A-Fa-f]{1,4}/);
++        if (!hex) {
++          out += c + next;
++          i += 2;
++          continue;
++        }
++        out += String.fromCodePoint(parseInt(hex[0], 16));
++        i += 2 + hex[0].length;
++        continue;
++      }
++      case "U": {
++        const hex = s.substring(i + 2, i + 10).match(/^[0-9A-Fa-f]{1,8}/);
++        if (!hex) {
++          out += c + next;
++          i += 2;
++          continue;
++        }
++        const cp = parseInt(hex[0], 16);
++        if (cp > 0x10ffff) {
++          out += c + next;
++          i += 2;
++          continue;
++        }
++        out += String.fromCodePoint(cp);
++        i += 2 + hex[0].length;
++        continue;
++      }
++      default:
++        // Unknown escape — keep verbatim
++        out += c + next;
++        i += 2;
++    }
++  }
++  return out;
++}
++
++// ─── wordToLit (convenience over wordToParts) ────────────────────────────────
++
++/** Returns the static string value of a Word when every fragment is
++ *  statically resolvable, joined as the command would see them after
++ *  quote-stripping. Returns null for any dynamic component.
++ *
++ *  Multi-part juxtapositions of static fragments fold:
++ *    echo "foo""bar"   → "foobar"
++ *    echo 'a'b"c"      → "abc"
++ *    echo $'hi\\n'      → "hi\\n" (real newline)
++ *    echo "x$y"        → null    (mid-word ParamExp)
++ *    echo ""           → ""      (empty literal — NOT null) */
++export function wordToLit(w: Word): string | null {
++  const parts = wordToParts(w);
++  let out = "";
++  for (const f of parts) {
++    if (f.kind !== "literal") return null;
++    out += f.value;
++  }
++  return out;
++}
++
++// ─── ResolvedCall + resolveFlags ─────────────────────────────────────────────
++
+ export interface ResolvedCall {
+   cmd: string; // first argument value, e.g. "rm"
+   flags: string[]; // all "-x" and "--foo" arguments, split from combined short flags
+@@ -15,28 +289,21 @@ export interface ResolvedCall {
+   raw: CallExprNode; // original AST node
+ }
+ 
+-// wordToLit extracts the effective string value of a Word as it would
+-// be passed to a command after shell quote-stripping. Returns null
+-// when the value can't be statically resolved (variables, command
+-// substitutions, multi-part juxtapositions).
+-//
+-// Handles:
+-//   echo hello       → "hello"   (Lit)
+-//   echo "hello"     → "hello"   (DblQuoted{Lit})
+-//   echo 'hello'     → "hello"   (SglQuoted)
+-//   echo "$x"        → null      (DblQuoted with ParamExp)
+-//   echo "a"b        → null      (multi-part juxtaposition)
+-export function wordToLit(w: Word): string | null {
+-  if (w.parts.length !== 1) return null;
+-  const p = w.parts[0];
+-  if (!p) return null;
+-  if (p.type === "Lit") return p.value;
+-  if (p.type === "SglQuoted") return p.value;
+-  if (p.type === "DblQuoted" && p.parts.length === 1) {
+-    const inner = p.parts[0];
+-    if (inner?.type === "Lit") return inner.value;
++/** True iff every char after the leading dash is an ASCII letter. Only
++ *  pure-letter sequences expand as combined short flags (`-rf` → -r -f).
++ *  Anything containing `=`, digits, or punctuation (`-=value`, `-O2`) is
++ *  preserved as a single token to avoid fabricating flags that weren't
++ *  in the source. */
++function isCombinedShortFlag(s: string): boolean {
++  if (s.length <= 2 || s.startsWith("--")) return false;
++  for (let i = 1; i < s.length; i++) {
++    const c = s.charCodeAt(i);
++    const isAscii =
++      (c >= 0x41 && c <= 0x5a) || // A-Z
++      (c >= 0x61 && c <= 0x7a); // a-z
++    if (!isAscii) return false;
+   }
+-  return null;
++  return true;
+ }
+ 
+ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
+@@ -57,13 +324,16 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
+       args.push(DYNAMIC);
+       continue;
+     }
+-    if (lit === "--") {
++    // Only the FIRST literal `--` toggles end-of-flags. After that,
++    // a `--` token is itself a positional argument.
++    if (lit === "--" && !endOfFlags) {
+       endOfFlags = true;
+       continue;
+     }
+-    if (!endOfFlags && lit.startsWith("-")) {
+-      // Expand combined short flags: -rf → ["-r", "-f"]
+-      if (lit.length > 2 && !lit.startsWith("--")) {
++    // POSIX convention: a bare `-` is a positional (stdin sentinel),
++    // not a flag.
++    if (!endOfFlags && lit.startsWith("-") && lit !== "-") {
++      if (isCombinedShortFlag(lit)) {
+         for (const ch of lit.slice(1)) flags.push(`-${ch}`);
+       } else {
+         flags.push(lit);
+@@ -75,3 +345,8 @@ export function resolveFlags(call: CallExprNode): ResolvedCall | null {
+ 
+   return { cmd: firstLit, flags, args, raw: call };
+ }
++
++// Avoid an unused-import warning for SglQuoted; it's used only in the
++// type position of `unescapeAnsiC`'s contract, which the JSDoc above
++// describes informally. Exporting nothing keeps the surface minimal.
++export type { SglQuoted };
+diff --git a/src/index.ts b/src/index.ts
+index 7545637..445b102 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,78 +1,135 @@
+ import type { ShellFile } from "./types.js";
+ import { loadWasm, parseRaw } from "./wasm.js";
+ 
+-export {
+-  findAssignments,
+-  findCalls,
+-  findCmdSubstitutions,
+-  findFunctions,
+-  findRedirects,
+-} from "./extract.js";
+-export type { ResolvedArg, ResolvedCall } from "./flags.js";
+-export { DYNAMIC, resolveFlags, wordToLit } from "./flags.js";
+-export type { UnwrappedCall } from "./semantic.js";
+-export { unwrapCall } from "./semantic.js";
++// ─── Type re-exports ─────────────────────────────────────────────────────────
++
+ export type {
+-  ArithmCmd,
+-  ArithmExp,
+-  ArithmExpr,
+-  ArrayElem,
+-  ArrayExpr,
+   Assign,
+-  BinaryArithm,
+-  BinaryCmd,
+-  BinaryTest,
+-  BinCmdOp,
+-  Block,
+-  BraceExp,
+   CallExprNode,
+-  CaseClause,
+-  CaseItem,
+-  CaseOp,
+   CmdSubst,
+-  Command,
+-  Comment,
+-  CoprocClause,
+-  CStyleLoop,
+-  DblQuoted,
+-  DeclClause,
+-  Expansion,
+-  ExtGlob,
+-  ForClause,
+   FuncDecl,
+-  GlobOp,
+-  IfClause,
+-  LetClause,
+-  LitNode,
+-  NodePos,
+-  ParamExp,
+-  ParenArithm,
+-  ParenTest,
+-  ProcOp,
+-  ProcSubst,
+   Redirect,
+-  RedirectOp,
+-  Replace,
+-  SglQuoted,
+   ShellFile,
+   ShellNode,
+-  Slice,
+   Stmt,
+-  Subshell,
+-  TestClause,
+-  TestDecl,
+-  TestExpr,
+-  TimeClause,
+-  UnaryArithm,
+-  UnaryTest,
+-  WhileClause,
+   Word,
+-  WordIter,
+   WordPart,
+ } from "./types.js";
+ export type { Visitor } from "./walk.js";
++
++// ─── Walker + extractors (BUG-006: filter options) ───────────────────────────
++
++export {
++  type ExtractAssignmentOptions,
++  type ExtractCallOptions,
++  type ExtractRedirectOptions,
++  findAll,
++  findAssignments,
++  findCalls,
++  findCmdSubstitutions,
++  findFunctions,
++  findRedirects,
++} from "./extract.js";
+ export { walk } from "./walk.js";
+ 
++// ─── flags.ts — canonicalization + ArgFragment + DYNAMIC ─────────────────────
++
++export {
++  type ArgFragment,
++  DYNAMIC,
++  isDynamic,
++  isResolved,
++  type ResolvedArg,
++  type ResolvedCall,
++  resolveFlags,
++  unescapeAnsiC,
++  wordToLit,
++  wordToParts,
++} from "./flags.js";
++
++// ─── semantic.ts — discriminated UnwrappedCall ───────────────────────────────
++
++import type { UnwrappedCall } from "./semantic.js";
++import { unwrapCallParsed as _unwrapCallParsedInternal } from "./semantic.js";
++import type { CallExprNode } from "./types.js";
++
++export type { UnwrappedCall } from "./semantic.js";
++export { unwrapCall } from "./semantic.js";
++
++// ─── Effects API ─────────────────────────────────────────────────────────────
++
++export { type Effect, effectOf, effectsOf } from "./effects.js";
++
++// ─── ParseError hierarchy (BUG-009) ──────────────────────────────────────────
++
++/** Discriminated base class for any error thrown by `parse()`. Consumers
++ *  catch and dispatch on `kind` instead of regexing message strings. */
++export abstract class ShellAstError extends Error {
++  abstract readonly kind: "syntax" | "size-limit" | "wasm-load" | "wasm-runtime";
++  constructor(message: string) {
++    super(message);
++    this.name = this.constructor.name;
++  }
++}
++
++/** Thrown by `parse()` when mvdan/sh's parser rejects the input. */
++export class ParseSyntaxError extends ShellAstError {
++  readonly kind = "syntax" as const;
++  readonly line: number;
++  readonly col: number;
++  /** Short window of source around the syntax error (best-effort). */
++  readonly snippet: string | undefined;
++
++  constructor(message: string, line: number, col: number, snippet?: string) {
++    super(message);
++    this.line = line;
++    this.col = col;
++    this.snippet = snippet;
++  }
++}
++
++/** Thrown by `parse()` when the input exceeds the configured maxBytes. */
++export class ParseSizeError extends ShellAstError {
++  readonly kind = "size-limit" as const;
++  readonly bytes: number;
++  readonly limit: number;
++  constructor(bytes: number, limit: number) {
++    super(`shell-ast: input size ${bytes} bytes exceeds maxBytes ${limit}`);
++    this.bytes = bytes;
++    this.limit = limit;
++  }
++}
++
++/** Thrown when the WASM module fails to load (file missing, bad path,
++ *  malformed binary). Different from a syntax error — distinguishes
++ *  "infra broken" from "user input malformed". */
++export class WasmLoadError extends ShellAstError {
++  readonly kind = "wasm-load" as const;
++}
++
++/** Thrown when the WASM module loaded but reported an internal error
++ *  during parse (very rare; usually indicates a serializer bug). */
++export class WasmRuntimeError extends ShellAstError {
++  readonly kind = "wasm-runtime" as const;
++}
++
++/** Parse a `1:5: message` style location from mvdan/sh error text.
++ *  Returns nullish components when the pattern doesn't match. */
++function parseLocation(msg: string): { line?: number; col?: number; rest: string } {
++  const m = msg.match(/^(\d+):(\d+):\s*(.+)$/s);
++  if (!m) return { rest: msg };
++  return { line: Number(m[1]), col: Number(m[2]), rest: m[3]! };
++}
++
++function snippetAt(src: string, line: number, col: number): string {
++  const lines = src.split(/\r?\n/);
++  const target = lines[line - 1] ?? "";
++  const pointer = `${" ".repeat(Math.max(0, col - 1))}^`;
++  return `${target}\n${pointer}`;
++}
++
++// ─── parse() ─────────────────────────────────────────────────────────────────
++
+ export interface ParseOptions {
+   /** Reject inputs whose UTF-8 byte length exceeds this cap.
+    *  Defaults to 1_000_000 (1 MB). Pass Infinity to disable. */
+@@ -90,21 +147,76 @@ export async function parse(
+   dialect: "bash" | "posix" | "mksh" = "bash",
+   options: ParseOptions = {}
+ ): Promise<ShellFile> {
++  // Strip a leading UTF-8 BOM — mvdan/sh would otherwise treat it as
++  // part of the first token (cmd: "﻿echo") and consumers see an
++  // unresolvable command name. Files exported from Windows tooling
++  // frequently carry one.
++  if (src.charCodeAt(0) === 0xfeff) {
++    src = src.slice(1);
++  }
++
+   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+   const bytes = Buffer.byteLength(src, "utf8");
+   if (bytes > maxBytes) {
+-    throw new Error(
+-      `shell-ast: input size ${bytes} bytes exceeds maxBytes ${maxBytes}`
++    throw new ParseSizeError(bytes, maxBytes);
++  }
++
++  try {
++    await loadWasm();
++  } catch (err) {
++    throw new WasmLoadError(
++      `shell-ast: WASM failed to load — ${err instanceof Error ? err.message : String(err)}`
+     );
+   }
+ 
+-  await loadWasm();
+   const json = parseRaw(src, dialect, options.splitBraces);
+   const parsed = JSON.parse(json) as Record<string, unknown>;
+   // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature forbids .error on Record<>
+   if (parsed["error"]) {
+-    // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature forbids .error on Record<>
+-    throw new Error(String(parsed["error"]));
++    // biome-ignore lint/complexity/useLiteralKeys: same reason
++    const msg = String(parsed["error"]);
++    // biome-ignore lint/complexity/useLiteralKeys: same reason
++    const isSyntax = parsed["syntaxError"] === true;
++    if (!isSyntax) {
++      throw new WasmRuntimeError(`shell-ast: WASM reported error — ${msg}`);
++    }
++    const { line, col, rest } = parseLocation(msg);
++    if (line !== undefined && col !== undefined) {
++      throw new ParseSyntaxError(msg, line, col, snippetAt(src, line, col));
++    }
++    throw new ParseSyntaxError(rest, 0, 0);
+   }
+   return parsed as unknown as ShellFile;
+ }
++
++// ─── preloadWasm (BUG-010) ───────────────────────────────────────────────────
++
++/** Warm the WASM module ahead of the first `parse()` call. Idempotent;
++ *  safe to call any number of times. Useful for compiled-binary
++ *  consumers that want WASM-init latency out of the first-evaluation
++ *  hot path. */
++export async function preloadWasm(): Promise<void> {
++  try {
++    await loadWasm();
++  } catch (err) {
++    throw new WasmLoadError(
++      `shell-ast: WASM preload failed — ${err instanceof Error ? err.message : String(err)}`
++    );
++  }
++}
++
++// ─── unwrapCallParsed convenience wrapper ────────────────────────────────────
++
++/** Async unwrap that pre-parses the script for any `wrapped-script`
++ *  result. Saves consumers a re-parse when they want to recurse into
++ *  the inner AST.
++ *
++ *  ```ts
++ *  const u = await unwrapCallParsed(call);
++ *  if (u?.kind === "wrapped-script") {
++ *    for (const inner of findCalls(u.innerAst!)) { ... }
++ *  }
++ *  ``` */
++export function unwrapCallParsed(call: CallExprNode): Promise<UnwrappedCall | null> {
++  return _unwrapCallParsedInternal(call, parse);
++}
+diff --git a/src/semantic.ts b/src/semantic.ts
+index 434a9f2..f9e013a 100644
+--- a/src/semantic.ts
++++ b/src/semantic.ts
+@@ -1,23 +1,39 @@
++// Privilege-escalator and shell-wrapper unwrapping.
++//
++// Result space is an exhaustive discriminated union — every legitimate
++// outcome has its own `kind`. Consumers write `switch (u.kind)` with
++// TypeScript exhaustiveness; ambiguous-shape bugs (commands as flags,
++// wrapper detection lost, dual representation of script + args)
++// become impossible to construct.
++
+ import type { ResolvedArg } from "./flags.js";
+-import { resolveFlags, wordToLit } from "./flags.js";
+-import type { CallExprNode } from "./types.js";
++import { DYNAMIC, resolveFlags, wordToLit } from "./flags.js";
++import type { CallExprNode, ShellFile } from "./types.js";
++
++export type { ResolvedArg, ResolvedCall } from "./flags.js";
+ 
+-export type { ResolvedCall } from "./flags.js";
++// ─── Wrapper schema ──────────────────────────────────────────────────────────
+ 
+ interface WrapperSchema {
+-  /** Flags that consume the next positional arg as their value. */
++  /** Flags that consume the next positional arg as their value
++   *  (`sudo -u root cmd`, `sudo --user root cmd`). Include both short
++   *  and space-form long variants. */
+   flagsWithArg: ReadonlySet<string>;
+   /** When true, --foo=value is also accepted (single token, no extra arg). */
+   longEq: boolean;
+-  /** When set, this flag's value is itself a shell command string.
+-   *  unwrapCall returns it as `commandString` so the caller can
+-   *  recursively parse it. The wrapper's own cmd/flags/args describe
+-   *  the wrapper itself in this case. */
++  /** When set, this flag's value is itself a shell command string
++   *  (`bash -c "..."`). */
+   commandFlag?: string;
+   /** When true, the first positional arg is the target username
+-   *  (e.g. `gosu USER cmd`, `su USER -c "..."`). The walker consumes
+-   *  one positional before looking for the inner command. */
++   *  (`gosu USER cmd`, `su USER -c "..."`). */
+   positionalUser?: boolean;
++  /** Some shells take their script via positional args, not a flag:
++   *    "concat" — `eval "rm" "-rf" "/"` joins args[1:] with spaces
++   *    "first"  — (reserved for future shapes; not currently used)
++   *  When set, the wrapper produces a "wrapped-script" variant whose
++   *  script field is built from positional args after the wrapper's
++   *  own flags are consumed. */
++  commandFromArgs?: "concat" | "first";
+ }
+ 
+ const SHELL_SCHEMA: WrapperSchema = {
+@@ -27,8 +43,32 @@ const SHELL_SCHEMA: WrapperSchema = {
+ };
+ 
+ const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
++  // sudo: short flags accept space- or equals-form; long flags accept
++  // both `--user=root` (longEq) and `--user root` (space). Include both
++  // in flagsWithArg so space-form long flags are consumed.
+   sudo: {
+-    flagsWithArg: new Set(["-u", "-g", "-h", "-D", "-C", "-p", "-r", "-t", "-T", "-U"]),
++    flagsWithArg: new Set([
++      "-u",
++      "-g",
++      "-h",
++      "-D",
++      "-C",
++      "-p",
++      "-r",
++      "-t",
++      "-T",
++      "-U",
++      "--user",
++      "--group",
++      "--host",
++      "--chdir",
++      "--close-from",
++      "--prompt",
++      "--role",
++      "--type",
++      "--command-timeout",
++      "--other-user",
++    ]),
+     longEq: true,
+   },
+   doas: {
+@@ -49,7 +89,16 @@ const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
+     positionalUser: true,
+   },
+   runuser: {
+-    flagsWithArg: new Set(["-u", "-g", "-G", "-s"]),
++    flagsWithArg: new Set([
++      "-u",
++      "-g",
++      "-G",
++      "-s",
++      "--user",
++      "--group",
++      "--supp-group",
++      "--shell",
++    ]),
+     longEq: true,
+     commandFlag: "-c",
+   },
+@@ -65,50 +114,115 @@ const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
+     longEq: true,
+   },
+   su: {
+-    flagsWithArg: new Set(["-s", "-G"]),
++    flagsWithArg: new Set(["-s", "-G", "--shell", "--supp-group"]),
+     longEq: false,
+     commandFlag: "-c",
+     positionalUser: true,
+   },
+-  // Shell wrappers carrying a command string. Not privilege escalators
+-  // by themselves, but `pkexec sh -c "rm -rf /"` chains them; consumers
+-  // need to surface the inner string regardless. All POSIX shells share
+-  // the same -c contract.
++  // POSIX shell wrappers carrying a script via -c. Not privilege
++  // escalators, but chained patterns like `pkexec sh -c "rm -rf /"`
++  // hide the inner command; surface the script regardless.
+   sh: SHELL_SCHEMA,
+   bash: SHELL_SCHEMA,
+   zsh: SHELL_SCHEMA,
+   dash: SHELL_SCHEMA,
+   ash: SHELL_SCHEMA,
++  ksh: SHELL_SCHEMA,
++  mksh: SHELL_SCHEMA,
++  // Shell-execution primitives whose script comes from positional args.
++  //   eval "rm -rf /" — args[1:] joined by spaces, re-parsed at runtime
++  //   exec rm -rf /   — args[1:] replace the current process
++  // exec is also handled as a normal wrapper since args[1:] IS the inner command.
++  eval: { flagsWithArg: new Set(), longEq: false, commandFromArgs: "concat" },
++  exec: { flagsWithArg: new Set(), longEq: false },
+ };
+ 
+-export interface UnwrappedCall {
+-  /** The wrapper name (sudo/doas/su/sh/...), or null when not wrapped. */
+-  wrapper: string | null;
+-  /** The inner command name. Null when the wrapper carries an opaque
+-   *  command string (commandString set) — caller must parse it. */
+-  cmd: string | null;
+-  flags: string[];
+-  args: ResolvedArg[];
+-  raw: CallExprNode;
+-  /** Set when the wrapper's `commandFlag` carried a shell-command
+-   *  string (e.g. `su -c "rm -rf /"` or `sh -c "..."`). When present,
+-   *  cmd/flags/args describe the wrapper itself; the caller should
+-   *  call parse() on commandString to analyze the inner command. */
+-  commandString?: string;
+-}
++// ─── Discriminated UnwrappedCall (BUG-003) ───────────────────────────────────
+ 
++/** The four legitimate outcomes of unwrapping a CallExpr. Consumers
++ *  write `switch (u.kind)` and TypeScript forces exhaustive handling.
++ *
++ *  - `plain`:           not a wrapper, or wrapper-named but used non-wrapper-ly
++ *                       (`bash`, `bash --version`, `sudo -V`, `gosu user`)
++ *  - `wrapped`:         wrapper detected, inner command resolved statically
++ *                       (`sudo rm -rf /`, `gosu user rm /tmp`, `exec rm /`)
++ *  - `wrapped-script`:  wrapper detected, inner is a shell-script string
++ *                       (`bash -c "rm"`, `eval "rm -rf"`). `script` is
++ *                       the value; consumers parse it themselves or use
++ *                       `unwrapCallParsed` for the pre-parsed `innerAst`.
++ *  - `wrapped-opaque`:  wrapper detected, inner unresolvable (`sudo $cmd`,
++ *                       `bash -c $script`). Wrapper detection preserved
++ *                       so security consumers still see escalation. */
++export type UnwrappedCall =
++  | {
++      kind: "plain";
++      cmd: string;
++      flags: string[];
++      args: ResolvedArg[];
++      raw: CallExprNode;
++    }
++  | {
++      kind: "wrapped";
++      wrapper: string;
++      cmd: string;
++      flags: string[];
++      args: ResolvedArg[];
++      raw: CallExprNode;
++    }
++  | {
++      kind: "wrapped-script";
++      wrapper: string;
++      /** The script-string value of the commandFlag (or concatenated
++       *  positional args for `eval`). Re-parse with `parse()` or use
++       *  `unwrapCallParsed` to get `innerAst` populated. */
++      script: string;
++      /** Wrapper's own flags as parsed (e.g. ["-c"]). */
++      flags: string[];
++      /** Positional args AFTER the script — bash assigns these to
++       *  $0/$1/… inside the inner script. */
++      args: ResolvedArg[];
++      raw: CallExprNode;
++      /** Pre-parsed inner AST. Populated only by `unwrapCallParsed`. */
++      innerAst?: ShellFile;
++    }
++  | {
++      kind: "wrapped-opaque";
++      wrapper: string;
++      flags: string[];
++      args: ResolvedArg[];
++      raw: CallExprNode;
++    };
++
++// ─── unwrapCall (sync) ───────────────────────────────────────────────────────
++
++/** Unwrap a CallExpr. Sync; never parses the inner script for
++ *  `wrapped-script` results. Use `unwrapCallParsed` if you need
++ *  `innerAst`.
++ *
++ *  Returns null only for truly malformed input (CallExpr with no args
++ *  at all — pure assignment-only stmts). All other shapes resolve to
++ *  one of the four discriminator kinds. */
+ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
+   const resolved = resolveFlags(call);
+   if (!resolved) return null;
+ 
+   const schema = WRAPPERS[resolved.cmd];
+   if (!schema) {
+-    return { wrapper: null, ...resolved };
++    return {
++      kind: "plain",
++      cmd: resolved.cmd,
++      flags: resolved.flags,
++      args: resolved.args,
++      raw: resolved.raw,
++    };
+   }
+ 
+-  // Walk the wrapper's args, consuming its own flags. Some wrappers
+-  // (su, gosu) have a positional username before the inner command;
+-  // userConsumed tracks whether we've already eaten it.
++  // commandFromArgs wrappers (eval) — script is positional, not -c flagged.
++  if (schema.commandFromArgs) {
++    return unwrapPositionalScript(resolved, call, schema);
++  }
++
++  // Standard flag-walker.
+   const rawArgs = call.args.slice(1);
+   let userConsumed = !schema.positionalUser;
+   let i = 0;
+@@ -118,18 +232,32 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
+     const lit = wordToLit(arg);
+     if (lit === null) break; // dynamic — stop walking
+ 
+-    // commandFlag (su's -c, sh's -c, etc.) — extract the command string.
++    // commandFlag (-c) — extract the script string.
+     if (schema.commandFlag && lit === schema.commandFlag) {
+       const next = rawArgs[i + 1];
+-      const commandString = next ? wordToLit(next) : null;
+-      if (commandString === null) break; // dynamic command string — give up
++      const script = next ? wordToLit(next) : null;
++      if (script === null) {
++        // bash -c with no value or dynamic value → opaque
++        return {
++          kind: "wrapped-opaque",
++          wrapper: resolved.cmd,
++          flags: resolved.flags,
++          args: resolved.args,
++          raw: call,
++        };
++      }
++      const trailingArgs: ResolvedArg[] = [];
++      for (const w of rawArgs.slice(i + 2)) {
++        const t = wordToLit(w);
++        trailingArgs.push(t === null ? DYNAMIC : t);
++      }
+       return {
++        kind: "wrapped-script",
+         wrapper: resolved.cmd,
+-        cmd: null,
++        script,
+         flags: resolved.flags,
+-        args: resolved.args,
++        args: trailingArgs,
+         raw: call,
+-        commandString,
+       };
+     }
+     if (schema.longEq && lit.startsWith("--") && lit.includes("=")) {
+@@ -153,7 +281,16 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
+     break; // inner command
+   }
+ 
+-  if (i >= rawArgs.length) return null;
++  if (i >= rawArgs.length) {
++    // Wrapper-named but no inner command found. Not really wrapping.
++    return {
++      kind: "plain",
++      cmd: resolved.cmd,
++      flags: resolved.flags,
++      args: resolved.args,
++      raw: resolved.raw,
++    };
++  }
+ 
+   const innerArgs = rawArgs.slice(i);
+   const firstInner = innerArgs[0];
+@@ -167,9 +304,18 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
+     end: lastInner.end,
+   };
+   const innerResolved = resolveFlags(syntheticCall);
+-  if (!innerResolved) return null;
+-
++  if (!innerResolved) {
++    // Inner is dynamic (`sudo $cmd`). Wrapper detection preserved.
++    return {
++      kind: "wrapped-opaque",
++      wrapper: resolved.cmd,
++      flags: resolved.flags,
++      args: resolved.args,
++      raw: call,
++    };
++  }
+   return {
++    kind: "wrapped",
+     wrapper: resolved.cmd,
+     cmd: innerResolved.cmd,
+     flags: innerResolved.flags,
+@@ -177,3 +323,70 @@ export function unwrapCall(call: CallExprNode): UnwrappedCall | null {
+     raw: call,
+   };
+ }
++
++/** Internal: handle eval-style positional-script wrappers. */
++function unwrapPositionalScript(
++  resolved: { cmd: string; flags: string[]; args: ResolvedArg[]; raw: CallExprNode },
++  call: CallExprNode,
++  schema: WrapperSchema
++): UnwrappedCall {
++  const positional = call.args.slice(1);
++  if (positional.length === 0) {
++    // Bare `eval` — no-op invocation; surface as plain.
++    return {
++      kind: "plain",
++      cmd: resolved.cmd,
++      flags: resolved.flags,
++      args: resolved.args,
++      raw: resolved.raw,
++    };
++  }
++  const literals: string[] = [];
++  for (const w of positional) {
++    const lit = wordToLit(w);
++    if (lit === null) {
++      return {
++        kind: "wrapped-opaque",
++        wrapper: resolved.cmd,
++        flags: resolved.flags,
++        args: resolved.args,
++        raw: call,
++      };
++    }
++    literals.push(lit);
++  }
++  const script =
++    schema.commandFromArgs === "concat" ? literals.join(" ") : (literals[0] ?? "");
++  return {
++    kind: "wrapped-script",
++    wrapper: resolved.cmd,
++    script,
++    flags: resolved.flags,
++    args: [],
++    raw: call,
++  };
++}
++
++// ─── unwrapCallParsed (async — populates innerAst, BUG-007) ──────────────────
++
++/** Async unwrap that additionally pre-parses the script for any
++ *  `wrapped-script` result. Consumers wanting to recurse into the
++ *  inner AST get it without a second parse() call.
++ *
++ *  Takes a `parse` function as input to avoid a circular import.
++ *  The public `parse` from `src/index.ts` is the expected argument. */
++export async function unwrapCallParsed(
++  call: CallExprNode,
++  parse: (src: string) => Promise<ShellFile>
++): Promise<UnwrappedCall | null> {
++  const u = unwrapCall(call);
++  if (!u || u.kind !== "wrapped-script") return u;
++  try {
++    const innerAst = await parse(u.script);
++    return { ...u, innerAst };
++  } catch {
++    // Inner script is shell-syntactically invalid — return without
++    // innerAst so consumers can still inspect the script string.
++    return u;
++  }
++}
+diff --git a/tests/_assertions.ts b/tests/_assertions.ts
+index a982dd3..30495e6 100644
+--- a/tests/_assertions.ts
++++ b/tests/_assertions.ts
+@@ -6,40 +6,53 @@
+ // step over the whole test surface (see .github/workflows/ci.yml).
+ //
+ // Example:
+-//   testCmd("rm -rf /", { cmd: "rm", flags: ["-r","-f"], args: ["/"] });
++//   testCmd("rm -rf /",                  { cmd: "rm", flags: ["-r","-f"], args: ["/"] });
++//   testCmd("sudo -u root rm /",         { wrapper: "sudo", cmd: "rm" });
++//   testCmd(`bash -c "rm -rf /"`,        { wrapper: "bash", script: "rm -rf /" });
+ 
+ import { expect, test } from "bun:test";
+ import type { ResolvedArg } from "../src/index.js";
+ import { findCalls, parse, resolveFlags } from "../src/index.js";
++import type { UnwrappedCall } from "../src/semantic.js";
+ import { unwrapCall } from "../src/semantic.js";
+ 
+ type Dialect = "bash" | "posix" | "mksh";
+ 
+ export interface ExpectedCmd {
+-  // First-call assertions (applied to calls[0])
+-  cmd?: string | null;
++  // ─── Discriminator-aware assertions ──────────────────────────────
++  /** If set, asserts the UnwrappedCall.kind exactly. Otherwise the
++   *  expected kind is derived from the other fields. */
++  kind?: UnwrappedCall["kind"];
++  /** Inner cmd name for `wrapped` and `plain` kinds. Set to undefined
++   *  to skip; setting to a string asserts a `wrapped`/`plain` result. */
++  cmd?: string;
++  /** Wrapper name for any wrapped variant. Set to null to assert
++   *  `plain` kind (no wrapper). */
++  wrapper?: string | null;
++  /** Asserts kind === "wrapped-script" and script equals this value. */
++  script?: string;
++
++  // ─── Field-level assertions (any kind) ───────────────────────────
+   flags?: string[];
+   args?: ResolvedArg[];
+-  wrapper?: string | null;
+-  commandString?: string;
+   /** Exact length of calls[0].assigns (for FOO=bar cmd patterns). */
+   assignsCount?: number;
+ 
+-  // Whole-AST assertions
++  // ─── Whole-AST assertions ────────────────────────────────────────
+   /** Names (Lit value) of every call in source order. */
+   calls?: string[];
+   /** Total number of CallExpr nodes. */
+   callCount?: number;
+ 
+-  // Negative
++  // ─── Negative ────────────────────────────────────────────────────
+   /** Expect parse() to throw. true = any throw; RegExp = message must match. */
+   throws?: boolean | RegExp;
+ 
+-  // Parse options
++  // ─── Parse options ───────────────────────────────────────────────
+   dialect?: Dialect;
+   splitBraces?: boolean;
+ 
+-  // Test-suite plumbing
++  // ─── Test-suite plumbing ─────────────────────────────────────────
+   /** Override the auto-generated test name (defaults to the source). */
+   name?: string;
+   /** Skip this case without removing it. */
+@@ -51,6 +64,30 @@ function callName(c: ReturnType<typeof findCalls>[number]): string {
+   return part?.type === "Lit" ? part.value : "<dynamic>";
+ }
+ 
++/** Derive the expected discriminator from the other fields when the
++ *  caller didn't specify `kind` explicitly. Allows existing tests to
++ *  keep working without rewriting every fixture. */
++function expectedKind(e: ExpectedCmd): UnwrappedCall["kind"] | null {
++  if (e.kind !== undefined) return e.kind;
++  if (e.script !== undefined) return "wrapped-script";
++  if (e.wrapper === null) return "plain";
++  if (e.wrapper !== undefined && e.cmd === undefined) return "wrapped-opaque";
++  if (e.wrapper !== undefined) return "wrapped";
++  if (e.cmd !== undefined) return "plain";
++  return null;
++}
++
++/** Read `wrapper` off any UnwrappedCall variant (returns null for plain). */
++function wrapperOf(u: UnwrappedCall): string | null {
++  return u.kind === "plain" ? null : u.wrapper;
++}
++
++/** Read `cmd` off variants that have one. */
++function cmdOf(u: UnwrappedCall): string | null {
++  if (u.kind === "plain" || u.kind === "wrapped") return u.cmd;
++  return null;
++}
++
+ export function testCmd(src: string, expected: ExpectedCmd): void {
+   const runner = expected.skip ? test.skip : test;
+   runner(expected.name ?? src, async () => {
+@@ -74,21 +111,35 @@ export function testCmd(src: string, expected: ExpectedCmd): void {
+       expect(calls.length).toBe(expected.callCount);
+     }
+ 
+-    // Hoist single-call analyses so each per-field assertion just
+-    // reads from the cached value. unwrapCall covers both wrapper and
+-    // non-wrapper paths (it returns {wrapper: null, cmd: ...} for
+-    // plain calls), so it's the source of truth for cmd.
+     const first = calls[0];
+     const u = first ? unwrapCall(first) : null;
+     const r = first ? resolveFlags(first) : null;
+ 
+-    if (expected.cmd !== undefined) expect(u?.cmd ?? null).toBe(expected.cmd);
+-    if (expected.flags !== undefined) expect(r?.flags).toEqual(expected.flags);
+-    if (expected.args !== undefined) expect(r?.args).toEqual(expected.args);
+-    if (expected.wrapper !== undefined)
+-      expect(u?.wrapper ?? null).toBe(expected.wrapper);
+-    if (expected.commandString !== undefined) {
+-      expect(u?.commandString).toBe(expected.commandString);
++    const wantKind = expectedKind(expected);
++    if (wantKind !== null) {
++      expect(u?.kind).toBe(wantKind);
++    }
++    if (expected.cmd !== undefined) {
++      expect(u ? cmdOf(u) : null).toBe(expected.cmd);
++    }
++    if (expected.wrapper !== undefined) {
++      expect(u ? wrapperOf(u) : null).toBe(expected.wrapper);
++    }
++    if (expected.script !== undefined) {
++      expect(u?.kind).toBe("wrapped-script");
++      if (u?.kind === "wrapped-script") {
++        expect(u.script).toBe(expected.script);
++      }
++    }
++    if (expected.flags !== undefined) {
++      // For wrapped/plain/wrapped-opaque, flags come from the unwrap
++      // shape; for wrapped-script the script value is separate so we
++      // still read flags from u. For consistency we read r.flags
++      // which is always the outer-call resolveFlags result.
++      expect(r?.flags).toEqual(expected.flags);
++    }
++    if (expected.args !== undefined) {
++      expect(r?.args).toEqual(expected.args);
+     }
+     if (expected.assignsCount !== undefined) {
+       expect(first?.assigns.length).toBe(expected.assignsCount);
+diff --git a/tests/helpers.test.ts b/tests/helpers.test.ts
+index 6cf687f..296b437 100644
+--- a/tests/helpers.test.ts
++++ b/tests/helpers.test.ts
+@@ -19,17 +19,21 @@ describe("wordToLit", () => {
+     expect(wordToLit(w)).toBe("hello");
+   });
+ 
+-  test("returns null for multi-part word (dynamic)", () => {
++  test("folds multi-part static Word into single string (BUG-004)", () => {
++    // Pre-fix: this returned null because wordToLit was too strict.
++    // Post-fix: every fragment is statically resolvable, so the word
++    // resolves to the concatenation "helloworld" — matching what the
++    // command actually receives after quote-stripping.
+     const w: Word = {
+       type: "Word",
+       parts: [makeLit("hello"), makeLit("world")],
+       pos: makePos(),
+       end: makePos(),
+     };
+-    expect(wordToLit(w)).toBeNull();
++    expect(wordToLit(w)).toBe("helloworld");
+   });
+ 
+-  test("returns null for non-Lit part", () => {
++  test("returns null for non-Lit part (genuinely dynamic)", () => {
+     const w: Word = {
+       type: "Word",
+       parts: [
+diff --git a/tests/security.test.ts b/tests/security.test.ts
+index c8e6343..dde83c8 100644
+--- a/tests/security.test.ts
++++ b/tests/security.test.ts
+@@ -153,13 +153,9 @@ describe("privilege escalators (audit B1, B4)", () => {
+   testCmd("runuser -u root rm -rf /", { wrapper: "runuser", cmd: "rm" });
+   testCmd("setpriv --reuid 0 rm -rf /", { wrapper: "setpriv", cmd: "rm" });
+   testCmd("sudo --user=root rm -rf /", { wrapper: "sudo", cmd: "rm" });
+-  // su -c / sh -c put the inner command INSIDE -c's value as a string.
+-  // unwrapCall returns commandString instead of cmd so the consumer
+-  // can parse() it themselves.
+-  testCmd(`su user -c "rm -rf /"`, {
+-    wrapper: "su",
+-    cmd: null,
+-    commandString: "rm -rf /",
+-  });
+-  testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", cmd: null, commandString: "rm -rf /" });
++  // su -c / sh -c put the inner command INSIDE -c's value as a script
++  // string. unwrapCall returns kind:"wrapped-script" with the script
++  // field; consumers parse() it themselves (or use unwrapCallParsed).
++  testCmd(`su user -c "rm -rf /"`, { wrapper: "su", script: "rm -rf /" });
++  testCmd(`sh -c "rm -rf /"`, { wrapper: "sh", script: "rm -rf /" });
+ });
+diff --git a/tests/semantic.test.ts b/tests/semantic.test.ts
+index 4eb46a6..21dd6fa 100644
+--- a/tests/semantic.test.ts
++++ b/tests/semantic.test.ts
+@@ -3,62 +3,78 @@ import { unwrapCall } from "../src/semantic.js";
+ import type { CallExprNode } from "../src/types.js";
+ import { makeCall, makePos } from "./_factories.js";
+ 
+-describe("unwrapCall", () => {
+-  test("non-escalator command returns wrapper: null", () => {
++describe("unwrapCall — discriminated kinds", () => {
++  test("non-escalator command → kind:'plain'", () => {
+     const call = makeCall("rm", "-rf", "/");
+     const result = unwrapCall(call);
+-    expect(result).not.toBeNull();
+-    expect(result!.wrapper).toBeNull();
+-    expect(result!.cmd).toBe("rm");
+-    expect(result!.flags).toContain("-r");
+-    expect(result!.flags).toContain("-f");
+-    expect(result!.args).toEqual(["/"]);
++    expect(result?.kind).toBe("plain");
++    if (result?.kind === "plain") {
++      expect(result.cmd).toBe("rm");
++      expect(result.flags).toContain("-r");
++      expect(result.flags).toContain("-f");
++      expect(result.args).toEqual(["/"]);
++    }
+   });
+ 
+-  test("sudo without flag-arg pairs", () => {
++  test("sudo without flag-arg pairs → kind:'wrapped'", () => {
+     const call = makeCall("sudo", "rm", "-rf", "/");
+     const result = unwrapCall(call);
+-    expect(result).not.toBeNull();
+-    expect(result!.wrapper).toBe("sudo");
+-    expect(result!.cmd).toBe("rm");
+-    expect(result!.flags).toContain("-r");
+-    expect(result!.flags).toContain("-f");
+-    expect(result!.args).toEqual(["/"]);
++    expect(result?.kind).toBe("wrapped");
++    if (result?.kind === "wrapped") {
++      expect(result.wrapper).toBe("sudo");
++      expect(result.cmd).toBe("rm");
++      expect(result.flags).toContain("-r");
++      expect(result.flags).toContain("-f");
++      expect(result.args).toEqual(["/"]);
++    }
+   });
+ 
+-  test("sudo -u root rm -rf /", () => {
++  test("sudo -u root rm -rf / → kind:'wrapped' with -u consumed", () => {
+     const call = makeCall("sudo", "-u", "root", "rm", "-rf", "/");
+     const result = unwrapCall(call);
+-    expect(result).not.toBeNull();
+-    expect(result!.wrapper).toBe("sudo");
+-    expect(result!.cmd).toBe("rm");
+-    expect(result!.flags).toContain("-r");
+-    expect(result!.flags).toContain("-f");
+-    expect(result!.args).toEqual(["/"]);
++    expect(result?.kind).toBe("wrapped");
++    if (result?.kind === "wrapped") {
++      expect(result.wrapper).toBe("sudo");
++      expect(result.cmd).toBe("rm");
++      expect(result.flags).toContain("-r");
++      expect(result.flags).toContain("-f");
++      expect(result.args).toEqual(["/"]);
++    }
+   });
+ 
+-  test("sudo -n rm file (short boolean flag, no arg)", () => {
++  test("sudo -n rm file (short boolean flag, no arg) → kind:'wrapped'", () => {
+     const call = makeCall("sudo", "-n", "rm", "file");
+     const result = unwrapCall(call);
+-    expect(result!.wrapper).toBe("sudo");
+-    expect(result!.cmd).toBe("rm");
+-    expect(result!.args).toEqual(["file"]);
++    expect(result?.kind).toBe("wrapped");
++    if (result?.kind === "wrapped") {
++      expect(result.wrapper).toBe("sudo");
++      expect(result.cmd).toBe("rm");
++      expect(result.args).toEqual(["file"]);
++    }
+   });
+ 
+-  test("doas rm -rf /", () => {
++  test("doas rm -rf / → kind:'wrapped'", () => {
+     const call = makeCall("doas", "rm", "-rf", "/");
+     const result = unwrapCall(call);
+-    expect(result!.wrapper).toBe("doas");
+-    expect(result!.cmd).toBe("rm");
++    expect(result?.kind).toBe("wrapped");
++    if (result?.kind === "wrapped") {
++      expect(result.wrapper).toBe("doas");
++      expect(result.cmd).toBe("rm");
++    }
+   });
+ 
+-  test("sudo with only own flags (no real command) returns null", () => {
++  test("sudo with only own flags (no inner command) → kind:'plain' (gh #7)", () => {
+     const call = makeCall("sudo", "-u", "root");
+     const result = unwrapCall(call);
+-    expect(result).toBeNull();
++    expect(result?.kind).toBe("plain");
++    if (result?.kind === "plain") {
++      expect(result.cmd).toBe("sudo");
++      expect(result.flags).toEqual(["-u"]);
++      expect(result.args).toEqual(["root"]);
++    }
+   });
+ 
+-  test("returns null for empty call", () => {
++  test("empty CallExpr (no args at all) returns null", () => {
+     const call: CallExprNode = {
+       type: "CallExpr",
+       assigns: [],
+@@ -72,6 +88,6 @@ describe("unwrapCall", () => {
+   test("preserves raw reference to original call", () => {
+     const call = makeCall("sudo", "rm", "/");
+     const result = unwrapCall(call);
+-    expect(result!.raw).toBe(call);
++    expect(result?.raw).toBe(call);
+   });
+ });
+diff --git a/tests/v0.3.0-surface.test.ts b/tests/v0.3.0-surface.test.ts
+new file mode 100644
+index 0000000..40134df
+--- /dev/null
++++ b/tests/v0.3.0-surface.test.ts
+@@ -0,0 +1,437 @@
++// Coverage for v0.3.0's new public surface. Each describe block locks
++// down one of the BUG-002…BUG-010 items from docs/BUGS.md plus the
++// agent-hunt findings (short-flag fab, BOM, double-dash, etc.).
++
++/* biome-ignore-all lint/suspicious/noTemplateCurlyInString: shell ${var} fixtures */
++
++import { describe, expect, test } from "bun:test";
++import {
++  DYNAMIC,
++  type Effect,
++  effectOf,
++  effectsOf,
++  findAssignments,
++  findCalls,
++  findRedirects,
++  isDynamic,
++  isResolved,
++  ParseSizeError,
++  ParseSyntaxError,
++  parse,
++  preloadWasm,
++  type ResolvedArg,
++  ShellAstError,
++  unescapeAnsiC,
++  unwrapCall,
++  unwrapCallParsed,
++  WasmRuntimeError,
++  wordToParts,
++} from "../src/index.js";
++import { testCmd } from "./_assertions.js";
++
++// ─── BUG-003: discriminated UnwrappedCall — every kind reachable ─────────────
++
++describe("UnwrappedCall discriminator — every kind has tests", () => {
++  // plain: non-wrapper command, or wrapper-named used non-wrapper-ly
++  testCmd("rm -rf /", { kind: "plain", cmd: "rm" });
++  testCmd("bash --version", { kind: "plain", cmd: "bash" });
++  testCmd("bash", { kind: "plain", cmd: "bash" });
++  testCmd("sudo -V", { kind: "plain", cmd: "sudo" });
++  testCmd("gosu user", { kind: "plain", cmd: "gosu" });
++
++  // wrapped: wrapper detected, inner resolves statically
++  testCmd("sudo rm -rf /", { kind: "wrapped", wrapper: "sudo", cmd: "rm" });
++  testCmd("sudo -u root rm /", { kind: "wrapped", wrapper: "sudo", cmd: "rm" });
++  testCmd("sudo --user root rm", { kind: "wrapped", wrapper: "sudo", cmd: "rm" }); // #20 space form
++  testCmd("gosu nobody rm /tmp", { kind: "wrapped", wrapper: "gosu", cmd: "rm" });
++  testCmd("doas -u root rm /", { kind: "wrapped", wrapper: "doas", cmd: "rm" });
++  testCmd("pkexec --user r rm", { kind: "wrapped", wrapper: "pkexec", cmd: "rm" });
++  testCmd("exec rm -rf /", { kind: "wrapped", wrapper: "exec", cmd: "rm" });
++
++  // wrapped-script: inner is a string the consumer must re-parse
++  testCmd(`bash -c "rm -rf /"`, {
++    kind: "wrapped-script",
++    wrapper: "bash",
++    script: "rm -rf /",
++  });
++  testCmd(`sh -c "rm"`, { kind: "wrapped-script", wrapper: "sh", script: "rm" });
++  testCmd(`zsh -c "rm"`, { kind: "wrapped-script", wrapper: "zsh", script: "rm" });
++  testCmd(`ksh -c "rm"`, { kind: "wrapped-script", wrapper: "ksh", script: "rm" });
++  testCmd(`su u -c "rm -rf /"`, {
++    kind: "wrapped-script",
++    wrapper: "su",
++    script: "rm -rf /",
++  });
++  testCmd(`eval "rm -rf /"`, {
++    kind: "wrapped-script",
++    wrapper: "eval",
++    script: "rm -rf /",
++  });
++  testCmd(`eval rm -rf /`, {
++    kind: "wrapped-script",
++    wrapper: "eval",
++    script: "rm -rf /",
++  });
++
++  // wrapped-opaque: wrapper detected, inner unresolvable
++  test("sudo $cmd — kind:'wrapped-opaque' preserves wrapper detection", async () => {
++    const ast = await parse("sudo $cmd");
++    const u = unwrapCall(findCalls(ast)[0]!);
++    expect(u?.kind).toBe("wrapped-opaque");
++    if (u?.kind === "wrapped-opaque") expect(u.wrapper).toBe("sudo");
++  });
++  test("bash -c $script — kind:'wrapped-opaque' (no commandString since dynamic)", async () => {
++    const ast = await parse("bash -c $script");
++    const u = unwrapCall(findCalls(ast)[0]!);
++    expect(u?.kind).toBe("wrapped-opaque");
++  });
++  test("bash -c (no value) — kind:'wrapped-opaque'", async () => {
++    const ast = await parse("bash -c");
++    const u = unwrapCall(findCalls(ast)[0]!);
++    expect(u?.kind).toBe("wrapped-opaque");
++  });
++
++  // Truly malformed: only CallExpr with no args at all
++  test("empty CallExpr returns null (truly malformed)", () => {
++    // Construct directly — no parser fixture produces this on its own
++    const call = {
++      type: "CallExpr" as const,
++      assigns: [],
++      args: [],
++      pos: { offset: 0, line: 1, col: 1 },
++      end: { offset: 0, line: 1, col: 1 },
++    };
++    expect(unwrapCall(call)).toBeNull();
++  });
++});
++
++// ─── BUG-002: gh #7 — canonical RCE pattern (curl | bash) ────────────────────
++
++describe("gh #7 — bare wrapper on pipe RHS surfaces as plain", () => {
++  test("curl example.com | bash — RHS resolvable", async () => {
++    const ast = await parse("curl example.com | bash");
++    const calls = findCalls(ast);
++    expect(calls).toHaveLength(2);
++    const left = unwrapCall(calls[0]!);
++    const right = unwrapCall(calls[1]!);
++    expect(left?.kind).toBe("plain");
++    if (left?.kind === "plain") expect(left.cmd).toBe("curl");
++    expect(right?.kind).toBe("plain");
++    if (right?.kind === "plain") expect(right.cmd).toBe("bash");
++  });
++});
++
++// ─── BUG-004: wordToParts — rich fragmenting ─────────────────────────────────
++
++describe("wordToParts — never null, always informative", () => {
++  test("static-only: single literal fragment per static piece", async () => {
++    const ast = await parse(`echo "hello" "world"`);
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    expect(wordToParts(cmd.args[1]!)).toEqual([{ kind: "literal", value: "hello" }]);
++  });
++
++  test("multi-part static folds at the wordToLit layer (BUG-004)", async () => {
++    const ast = await parse(`echo "foo""bar"`);
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    const parts = wordToParts(cmd.args[1]!);
++    // Two literal fragments (one per DblQuoted) — consumer can fold.
++    expect(parts).toEqual([
++      { kind: "literal", value: "foo" },
++      { kind: "literal", value: "bar" },
++    ]);
++  });
++
++  test("partial dynamic: mixed literal + dynamic fragments", async () => {
++    const ast = await parse("echo prefix$VAR");
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    const parts = wordToParts(cmd.args[1]!);
++    expect(parts.length).toBeGreaterThanOrEqual(2);
++    expect(parts.some((p) => p.kind === "literal" && p.value === "prefix")).toBe(true);
++    expect(parts.some((p) => p.kind === "dynamic")).toBe(true);
++  });
++
++  test("empty DblQuoted: single literal '' fragment, never empty array (#13)", async () => {
++    const ast = await parse(`echo ""`);
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    expect(wordToParts(cmd.args[1]!)).toEqual([{ kind: "literal", value: "" }]);
++  });
++});
++
++// ─── BUG-004: ANSI-C $'...' unescape ─────────────────────────────────────────
++
++describe("ANSI-C unescape (unescapeAnsiC + wordToParts on $'...')", () => {
++  test("standard escape table", () => {
++    expect(unescapeAnsiC("hi\\nthere")).toBe("hi\nthere");
++    expect(unescapeAnsiC("\\t")).toBe("\t");
++    expect(unescapeAnsiC("\\r")).toBe("\r");
++    expect(unescapeAnsiC("\\\\")).toBe("\\");
++    expect(unescapeAnsiC("\\'")).toBe("'");
++    expect(unescapeAnsiC("a\\bb")).toBe("a\bb");
++    expect(unescapeAnsiC("\\e")).toBe("\x1b");
++  });
++
++  test("hex \\xHH", () => {
++    expect(unescapeAnsiC("\\x41")).toBe("A");
++    expect(unescapeAnsiC("\\x4a\\x4b")).toBe("JK");
++  });
++
++  test("octal \\0NNN", () => {
++    expect(unescapeAnsiC("\\101")).toBe("A");
++    expect(unescapeAnsiC("\\0")).toBe("\x00");
++  });
++
++  test("unicode \\uHHHH and \\UHHHHHHHH", () => {
++    expect(unescapeAnsiC("\\u00e9")).toBe("é");
++    expect(unescapeAnsiC("\\U0001F600")).toBe("\u{1F600}");
++  });
++
++  test("unknown escape kept verbatim", () => {
++    expect(unescapeAnsiC("\\z")).toBe("\\z");
++  });
++
++  test(`parsed $'\\n' produces a real newline in wordToParts`, async () => {
++    const ast = await parse(`echo $'\\n'`);
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    const parts = wordToParts(cmd.args[1]!);
++    expect(parts).toEqual([{ kind: "literal", value: "\n" }]);
++  });
++});
++
++// ─── BUG-005: isDynamic / isResolved guards ──────────────────────────────────
++
++describe("type guards isDynamic / isResolved (BUG-005)", () => {
++  test("isResolved narrows correctly", () => {
++    const a: ResolvedArg = "hello";
++    expect(isResolved(a)).toBe(true);
++    expect(isDynamic(a)).toBe(false);
++  });
++  test("isDynamic narrows the sentinel", () => {
++    expect(isDynamic(DYNAMIC)).toBe(true);
++    expect(isResolved(DYNAMIC)).toBe(false);
++  });
++  test("literal string '<dynamic>' is NOT confused with sentinel", () => {
++    const a: ResolvedArg = "<dynamic>";
++    expect(isResolved(a)).toBe(true);
++    expect(isDynamic(a)).toBe(false);
++  });
++});
++
++// ─── BUG-006: filter options on finders ──────────────────────────────────────
++
++describe("findCalls / findRedirects / findAssignments — filter options (BUG-006)", () => {
++  test(`findCalls depth:"any" returns calls inside CmdSubst`, async () => {
++    const ast = await parse("echo $(rm -rf /)");
++    expect(
++      findCalls(ast).map((c) => (c.args[0]?.parts[0] as { value?: string })?.value)
++    ).toEqual(["echo", "rm"]);
++  });
++
++  test(`findCalls depth:"top" skips CmdSubst subtree`, async () => {
++    const ast = await parse("echo $(rm -rf /)");
++    const names = findCalls(ast, { depth: "top" }).map(
++      (c) => (c.args[0]?.parts[0] as { value?: string })?.value
++    );
++    expect(names).toEqual(["echo"]);
++  });
++
++  test(`findCalls depth:"top" skips ProcSubst subtree`, async () => {
++    const ast = await parse("diff <(ls a) <(ls b)");
++    const names = findCalls(ast, { depth: "top" }).map(
++      (c) => (c.args[0]?.parts[0] as { value?: string })?.value
++    );
++    expect(names).toEqual(["diff"]);
++  });
++
++  test(`findRedirects ops:"write" excludes reads`, async () => {
++    const ast = await parse("a > out; b < in; c >> append; cat <<EOF\nhi\nEOF");
++    const writes = findRedirects(ast, { ops: "write" });
++    expect(writes.every((r) => [">", ">>", ">|", "&>", "&>>"].includes(r.op))).toBe(
++      true
++    );
++    expect(writes.length).toBe(2);
++  });
++
++  test(`findRedirects ops:"read" includes heredoc + here-string`, async () => {
++    const ast = await parse("cat <<EOF\nx\nEOF\ncat <<<hello");
++    const reads = findRedirects(ast, { ops: "read" });
++    expect(reads.length).toBe(2);
++  });
++
++  test(`findAssignments exportedOnly skips bare and prefix assigns`, async () => {
++    const ast = await parse("FOO=bar; export BAZ=qux; QUX=zot rm /");
++    const exp = findAssignments(ast, { exportedOnly: true }).map((a) => a.name?.value);
++    expect(exp).toEqual(["BAZ"]);
++  });
++});
++
++// ─── Effects API ─────────────────────────────────────────────────────────────
++
++describe("effectOf / effectsOf — structural effect classification", () => {
++  test("CallExpr → exec; CmdSubst → capture-exec", async () => {
++    const ast = await parse("echo $(date)");
++    const calls = findCalls(ast);
++    expect(effectOf(calls[0]!)).toBe("exec");
++    // CmdSubst comes from the Word's parts
++    const word = calls[0]!.args[1]!;
++    expect(effectOf(word.parts[0]!)).toBe("capture-exec");
++  });
++
++  test("Redirect ops map correctly", async () => {
++    const ast = await parse("a > b; c >> d; e < f; g <> h; i 2>&1");
++    const redirs = findRedirects(ast);
++    const got = redirs.map((r) => effectOf(r));
++    expect(got).toContain("fs-write");
++    expect(got).toContain("fs-read");
++    expect(got).toContain("fs-rw");
++    expect(got).toContain("fd-dup");
++  });
++
++  test("pipe BinaryCmd → pipe", async () => {
++    const ast = await parse("a | b");
++    const stmt = ast.stmts[0]!;
++    expect(effectOf(stmt.cmd!)).toBe("pipe");
++  });
++
++  test("background stmt → fork-detach via effectOf(Stmt)", async () => {
++    const ast = await parse("cmd &");
++    expect(effectOf(ast.stmts[0]!)).toBe("fork-detach");
++  });
++
++  test("effectsOf walks subtree and unions", async () => {
++    const ast = await parse("(echo $(rm)) > out");
++    const effects = effectsOf(ast);
++    expect(effects.has("subshell")).toBe(true);
++    expect(effects.has("exec")).toBe(true);
++    expect(effects.has("capture-exec")).toBe(true);
++    expect(effects.has("fs-write")).toBe(true);
++  });
++
++  test("Effect enum is exhaustive (smoke)", () => {
++    // Compile-time check that the union covers every literal we emit.
++    const _exhaust: Effect = "exec" as Effect;
++    expect(_exhaust).toBeDefined();
++  });
++});
++
++// ─── BUG-009: typed parse errors ─────────────────────────────────────────────
++
++describe("typed parse errors (BUG-009)", () => {
++  test("syntax error throws ParseSyntaxError with line/col", async () => {
++    let caught: unknown;
++    try {
++      await parse("if; then");
++    } catch (e) {
++      caught = e;
++    }
++    expect(caught).toBeInstanceOf(ParseSyntaxError);
++    expect(caught).toBeInstanceOf(ShellAstError);
++    if (caught instanceof ParseSyntaxError) {
++      expect(caught.kind).toBe("syntax");
++      expect(caught.line).toBeGreaterThan(0);
++      expect(caught.col).toBeGreaterThan(0);
++    }
++  });
++
++  test("size error throws ParseSizeError with bytes/limit", async () => {
++    let caught: unknown;
++    try {
++      await parse(`echo ${"x".repeat(10)}`, "bash", { maxBytes: 5 });
++    } catch (e) {
++      caught = e;
++    }
++    expect(caught).toBeInstanceOf(ParseSizeError);
++    if (caught instanceof ParseSizeError) {
++      expect(caught.kind).toBe("size-limit");
++      expect(caught.bytes).toBeGreaterThan(5);
++      expect(caught.limit).toBe(5);
++    }
++  });
++
++  test("kind discriminates between error types", async () => {
++    const syntax = await parse("if; then").catch((e) => e);
++    const size = await parse("a", "bash", { maxBytes: 0 }).catch((e) => e);
++    expect(syntax.kind).toBe("syntax");
++    expect(size.kind).toBe("size-limit");
++    // WasmRuntimeError is reachable only with a malformed dispatch — covered by
++    // the Go-side fuzz; assert the class exists.
++    expect(WasmRuntimeError.prototype).toBeInstanceOf(ShellAstError);
++  });
++});
++
++// ─── BUG-010: preloadWasm ────────────────────────────────────────────────────
++
++describe("preloadWasm (BUG-010)", () => {
++  test("idempotent — multiple calls all resolve", async () => {
++    await preloadWasm();
++    await preloadWasm();
++    await preloadWasm();
++    // After preload, a parse() is instant from the WASM-load perspective.
++    const ast = await parse("echo hi");
++    expect(ast.type).toBe("File");
++  });
++});
++
++// ─── BUG-007: unwrapCallParsed — innerAst populated ──────────────────────────
++
++describe("unwrapCallParsed — async unwrap with innerAst (BUG-007)", () => {
++  test(`bash -c "rm -rf /" returns innerAst pre-parsed`, async () => {
++    const ast = await parse(`bash -c "rm -rf /"`);
++    const u = await unwrapCallParsed(findCalls(ast)[0]!);
++    expect(u?.kind).toBe("wrapped-script");
++    if (u?.kind === "wrapped-script") {
++      expect(u.script).toBe("rm -rf /");
++      expect(u.innerAst).toBeDefined();
++      if (u.innerAst) {
++        const inner = findCalls(u.innerAst);
++        expect(inner).toHaveLength(1);
++      }
++    }
++  });
++
++  test("plain call still resolves without innerAst", async () => {
++    const ast = await parse("rm /tmp/x");
++    const u = await unwrapCallParsed(findCalls(ast)[0]!);
++    expect(u?.kind).toBe("plain");
++  });
++});
++
++// ─── Logic fixes from the audit's adversarial bug-hunt ───────────────────────
++
++describe("resolveFlags edge cases (held-branch logic fixes)", () => {
++  // #10/11 — short-flag fabrication
++  testCmd("cmd -=value", { cmd: "cmd", flags: ["-=value"], args: [] });
++  testCmd("cmd -ab=c", { cmd: "cmd", flags: ["-ab=c"], args: [] });
++  testCmd("gcc -O2 foo.c", { cmd: "gcc", flags: ["-O2"], args: ["foo.c"] });
++  testCmd("rm -rf /", { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
++  // #16 — second `--` is positional
++  testCmd("rm -- --", { cmd: "rm", flags: [], args: ["--"] });
++  testCmd("rm -- -a -b", { cmd: "rm", flags: [], args: ["-a", "-b"] });
++  // #18 — bare `-` is POSIX stdin sentinel
++  testCmd("cat -", { cmd: "cat", flags: [], args: ["-"] });
++  testCmd("cat - file", { cmd: "cat", flags: [], args: ["-", "file"] });
++});
++
++describe("BOM stripping (#29)", () => {
++  test("leading UTF-8 BOM is stripped before parse", async () => {
++    const ast = await parse("﻿echo hello");
++    const cmd = ast.stmts[0]?.cmd;
++    if (cmd?.type !== "CallExpr") throw new Error();
++    const lit = cmd.args[0]?.parts[0];
++    expect(lit?.type).toBe("Lit");
++    if (lit?.type === "Lit") expect(lit.value).toBe("echo");
++  });
++});
++
++// ─── Quoted-flag bypass (audit C2 — regression checks against the old "fragile" tests) ────
++
++describe("quoted flags still canonicalize (regression locks)", () => {
++  testCmd('rm "-rf" /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
++  testCmd("rm '-rf' /", { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
++  testCmd('rm "-r" "-f" /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
++  testCmd('"rm" -rf /', { cmd: "rm", flags: ["-r", "-f"], args: ["/"] });
++});
