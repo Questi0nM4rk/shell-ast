@@ -1,0 +1,297 @@
+diff --git a/.github/workflows/cc-review-cleanup.yml b/.github/workflows/cc-review-cleanup.yml
+new file mode 100644
+index 0000000..f0247bd
+--- /dev/null
++++ b/.github/workflows/cc-review-cleanup.yml
+@@ -0,0 +1,41 @@
++# ============================================================================
++#  cc-review cleanup — deletes the ephemeral debug log branch on PR close.
++#  Pairs with cc-review.yml, which creates pr-<N>-cc-review-output
++#  while the PR is open. Once the PR is closed or merged, that branch is junk —
++#  this removes it so consumer repos do not accumulate -cc-review-output refs.
++# ============================================================================
++name: cc-review cleanup
++
++on:
++  pull_request:
++    types: [closed]
++
++permissions:
++  contents: write
++
++jobs:
++  delete-log-branch:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Generate GitHub App token
++        id: app-token
++        uses: actions/create-github-app-token@v3
++        with:
++          client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
++          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
++          owner: ${{ github.repository_owner }}
++
++      - name: Delete the log branch
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++          REPO: ${{ github.repository }}
++          PR_NUMBER: ${{ github.event.pull_request.number }}
++        run: |
++          LOG_BRANCH="pr-${PR_NUMBER}-cc-review-output"
++          if gh api "repos/${REPO}/git/refs/heads/${LOG_BRANCH}" >/dev/null 2>&1; then
++            gh api -X DELETE "repos/${REPO}/git/refs/heads/${LOG_BRANCH}" \
++              && echo "Deleted ${LOG_BRANCH}" \
++              || echo "Failed to delete ${LOG_BRANCH} (non-fatal)"
++          else
++            echo "No log branch ${LOG_BRANCH} to delete."
++          fi
+diff --git a/.github/workflows/cc-review-interactive.yml b/.github/workflows/cc-review-interactive.yml
+new file mode 100644
+index 0000000..689e0a5
+--- /dev/null
++++ b/.github/workflows/cc-review-interactive.yml
+@@ -0,0 +1,119 @@
++# ============================================================================
++#  cc-review interactive — the @cc-review ping. ALWAYS available, regardless of
++#  the `trigger:` setting in .cc-review.yaml (even when trigger: disabled).
++#
++#  Comment on a PR:
++#     @cc-review                            review now — overrides the re-review hard-stop gate
++#     @cc-review what does this change do?  answer-only — a single reply, no review
++#
++#  The message after @cc-review is UNTRUSTED: it is written to a file and read by
++#  the workflow as data (it can only select answer-only mode or override the
++#  re-review gate — it can never force an approval).
++#
++#  The shared pipeline lives in the composite action .github/actions/cc-review-run.
++# ============================================================================
++name: cc-review interactive
++
++on:
++  issue_comment:
++    types: [created]
++  pull_request_review_comment:
++    types: [created]
++
++concurrency:
++  group: cc-review-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
++  cancel-in-progress: false
++
++jobs:
++  respond:
++    runs-on: ubuntu-latest
++    if: |
++      contains(github.event.comment.body, '@cc-review') &&
++      (github.event_name == 'pull_request_review_comment' ||
++       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null))
++    timeout-minutes: 30
++    permissions:
++      contents: write
++      pull-requests: write
++      issues: write
++
++    # Which cc-review ref the pipeline is cloned from. Consumers track `main`.
++    env:
++      CC_BOT_REF: main   # cc-review ref the pipeline is cloned from
++
++    steps:
++      - name: Checkout consumer repo
++        uses: actions/checkout@v6
++        with:
++          fetch-depth: 0
++
++      - name: Generate GitHub App token
++        id: app-token
++        uses: actions/create-github-app-token@v3
++        with:
++          client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
++          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
++          owner: ${{ github.repository_owner }}
++
++      - name: Extract PR number + untrusted message (to a file)
++        id: extract
++        env:
++          COMMENT_BODY: ${{ github.event.comment.body }}
++          EVENT_NAME: ${{ github.event_name }}
++          ISSUE_PR: ${{ github.event.issue.number }}
++          REVIEW_PR: ${{ github.event.pull_request.number }}
++        run: |
++          if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then PR="$REVIEW_PR"; else PR="$ISSUE_PR"; fi
++          [ -z "$PR" ] && { echo "::error::no PR number"; exit 1; }
++          echo "pr_number=$PR" >> "$GITHUB_OUTPUT"
++          # Strip everything up to and including @cc-review; keep the rest as the message.
++          # Written via printf to a file — never interpolated into the claude prompt.
++          MSG="${COMMENT_BODY#*@cc-review}"
++          printf '%s' "${MSG# }" > /tmp/cc-user-msg.txt
++          echo "Message bytes: $(wc -c < /tmp/cc-user-msg.txt)"
++
++      - name: Post status comment
++        id: status
++        continue-on-error: true   # a failed cosmetic status comment must not skip the review
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++          REPO: ${{ github.repository }}
++          PR: ${{ steps.extract.outputs.pr_number }}
++        run: |
++          ID=$(gh api "repos/${REPO}/issues/${PR}/comments" --method POST \
++            -f body="> **cc-review** is on it... :hourglass_flowing_sand:" --jq '.id')
++          echo "comment_id=$ID" >> "$GITHUB_OUTPUT"
++
++      # Runtime-cloned pipeline (see cc-review.yml for why a script, not a composite action).
++      # The @cc-review message was written to /tmp/cc-user-msg.txt above; ci-run.sh reads it.
++      - name: Clone cc-review bot
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++        run: |
++          git clone --depth 1 -b "$CC_BOT_REF" \
++            "https://x-access-token:${GH_TOKEN}@github.com/Questi0nM4rk/cc-review.git" /tmp/cc-review-bot
++
++      - name: Run cc-review
++        id: cc-review
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
++          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
++          REPO: ${{ github.repository }}
++          CC_POST: "1"
++          PING_OVERRIDE: "true"
++        run: bash /tmp/cc-review-bot/scripts/ci-run.sh
++
++      - name: Update status comment
++        if: always()
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++          REPO: ${{ github.repository }}
++          COMMENT_ID: ${{ steps.status.outputs.comment_id }}
++          OUTCOME: ${{ steps.cc-review.outcome }}
++          RUN_ID: ${{ github.run_id }}
++        run: |
++          [ -z "$COMMENT_ID" ] && exit 0
++          if [ "$OUTCOME" = "success" ]; then BODY="> **cc-review** finished. See the review / comment above."
++          else BODY="> **cc-review** hit an error. [Logs](https://github.com/${REPO}/actions/runs/${RUN_ID})"; fi
++          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --method PATCH -f body="$BODY" || true
+diff --git a/.github/workflows/cc-review.yml b/.github/workflows/cc-review.yml
+new file mode 100644
+index 0000000..dc89142
+--- /dev/null
++++ b/.github/workflows/cc-review.yml
+@@ -0,0 +1,119 @@
++# ============================================================================
++#  cc-review — automated strict PR review (powered by Claude Code)
++# ----------------------------------------------------------------------------
++#  This file lives in YOUR repo's .github/workflows/. It clones the cc-review
++#  bot at runtime and runs its self-contained review workflow on your PRs.
++#
++#  WHEN does it auto-review?  Controlled by `trigger:` in .cc-review.yaml:
++#     every_push : on PR open AND every push to the PR branch
++#     pr_open    : on PR open / reopen only            (default)
++#     disabled   : never auto-reviews
++#  Regardless of `trigger`, the @cc-review comment ping ALWAYS works
++#  (see cc-review-interactive.yml). The `cc-review` label and a manual
++#  workflow_dispatch are always-on overrides; the `no-review` label suppresses.
++#
++#  The shared pipeline (clone/prefetch/install/run/push) lives ONCE in the
++#  composite action .github/actions/cc-review-run — both this and the interactive
++#  workflow call it, so the heavy logic is edited in one place.
++#
++#  Requires repo secrets: CLAUDE_CODE_OAUTH_TOKEN, REVIEWER_APP_CLIENT_ID,
++#  REVIEWER_APP_PRIVATE_KEY. See the cc-review SPEC.md for GitHub App setup.
++# ============================================================================
++name: cc-review
++
++on:
++  pull_request:
++    types: [opened, reopened, synchronize, labeled]
++  workflow_dispatch:
++    inputs:
++      pr_number:
++        description: "PR number to review"
++        required: true
++
++concurrency:
++  group: cc-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
++  cancel-in-progress: false
++
++jobs:
++  review:
++    runs-on: ubuntu-latest
++    if: >-
++      !contains(github.event.pull_request.labels.*.name, 'no-review') &&
++      !contains(github.event.pull_request.user.login, '[bot]')
++    timeout-minutes: 30
++    permissions:
++      contents: write        # push memory + ephemeral log branches
++      pull-requests: write   # post reviews, resolve threads
++      issues: write          # post the walkthrough + status comments
++
++    # Which cc-review ref the pipeline is cloned from. Consumers track `main`.
++    env:
++      CC_BOT_REF: main   # cc-review ref the pipeline is cloned from
++
++    steps:
++      - name: Checkout consumer repo (PR head)
++        uses: actions/checkout@v6
++        with:
++          fetch-depth: 0
++
++      - name: Generate GitHub App token
++        id: app-token
++        uses: actions/create-github-app-token@v3
++        with:
++          client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
++          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
++          owner: ${{ github.repository_owner }}
++
++      - name: Resolve PR number + trigger gate
++        id: gate
++        env:
++          EVENT: ${{ github.event_name }}
++          ACTION: ${{ github.event.action }}
++          LABEL: ${{ github.event.label.name }}
++          DISPATCH_PR: ${{ github.event.inputs.pr_number }}
++          EVENT_PR: ${{ github.event.pull_request.number }}
++        run: |
++          PR="${DISPATCH_PR:-$EVENT_PR}"
++          echo "pr_number=$PR" >> "$GITHUB_OUTPUT"
++
++          TRIGGER=$(grep -oP '^trigger:\s*\K\S+' .cc-review.yaml 2>/dev/null | tr -d ' "'"'" || echo "pr_open")
++          [ -z "$TRIGGER" ] && TRIGGER="pr_open"
++          echo "Configured trigger: $TRIGGER (event=$EVENT action=$ACTION)"
++
++          RUN=false
++          case "$EVENT" in
++            workflow_dispatch) RUN=true ;;
++            pull_request)
++              if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "cc-review" ]; then RUN=true
++              elif [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
++                [ "$TRIGGER" = "pr_open" ] || [ "$TRIGGER" = "every_push" ] && RUN=true
++              elif [ "$ACTION" = "synchronize" ]; then
++                [ "$TRIGGER" = "every_push" ] && RUN=true
++              fi ;;
++          esac
++          echo "should_run=$RUN" >> "$GITHUB_OUTPUT"
++          echo "Decision: should_run=$RUN"
++
++      # The pipeline is a runtime-cloned script (scripts/ci-run.sh) in cc-review. A PRIVATE
++      # repo's composite action can't be referenced cross-repo from a personal account, so we
++      # clone the bot with the App token (which CAN read the private repo) and run it. Editing
++      # ci-run.sh updates every consumer on its next run — same runtime-update model as the brain.
++      - name: Clone cc-review bot
++        if: steps.gate.outputs.should_run == 'true'
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++        run: |
++          git clone --depth 1 -b "$CC_BOT_REF" \
++            "https://x-access-token:${GH_TOKEN}@github.com/Questi0nM4rk/cc-review.git" /tmp/cc-review-bot
++
++      - name: Run cc-review
++        id: cc-review
++        if: steps.gate.outputs.should_run == 'true'
++        env:
++          GH_TOKEN: ${{ steps.app-token.outputs.token }}
++          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
++          PR_NUMBER: ${{ steps.gate.outputs.pr_number }}
++          REPO: ${{ github.repository }}
++          CC_POST: "1"
++          PING_OVERRIDE: "false"
++        run: bash /tmp/cc-review-bot/scripts/ci-run.sh
