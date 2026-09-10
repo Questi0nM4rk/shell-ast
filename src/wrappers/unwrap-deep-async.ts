@@ -7,40 +7,40 @@
 // The `parse` function is threaded in (same pattern as
 // `unwrapCallParsed`) to avoid a circular import.
 
-import type { ResolveFlagsOptions } from "../flags.js";
 import type { CallExprNode, ShellFile } from "../types.js";
-import { WRAPPERS } from "./registry.js";
 import type { UnwrappedCall } from "./types.js";
-import { unwrapCall } from "./unwrap.js";
+import { type UnwrapOptions, unwrapCall } from "./unwrap.js";
 
 const MAX_CHAIN_DEPTH = 100;
 
 /** Walk the wrapper chain, re-parsing `wrapped-script` layers' scripts.
  *
- *  - For each `wrapped` layer with a wrapper-named inner cmd, continues
- *    with `u.innerRaw` (same as `unwrapDeep`).
+ *  - For each `wrapped` layer, continues with `u.innerRaw`; a redundant
+ *    terminal `plain` result is suppressed (same as `unwrapDeep`).
  *  - For each `wrapped-script` layer, parses `u.script` and continues
  *    with the parsed AST's first statement's CallExpr cmd (if any).
  *    The pushed layer has `innerAst` set.
- *  - Stops at `plain`, `wrapped-opaque`, or `wrapped` whose inner cmd
- *    isn't a recognized wrapper.
+ *  - Stops at `plain`, `wrapped-opaque`, or `wrapped` whose inner call
+ *    matches neither a built-in nor custom wrapper.
  *  - Parse error on a `wrapped-script` script → pushes the layer
  *    without `innerAst` and stops.
  *  - Caps at `MAX_CHAIN_DEPTH` defensively (returns partial chain). */
 export async function unwrapDeepParsed(
   call: CallExprNode,
   parse: (src: string) => Promise<ShellFile>,
-  opts?: ResolveFlagsOptions
+  opts?: UnwrapOptions
 ): Promise<UnwrappedCall[]> {
   const chain: UnwrappedCall[] = [];
   let current: CallExprNode | undefined = call;
+  let suppressPlain = false;
   while (current && chain.length < MAX_CHAIN_DEPTH) {
     const u = unwrapCall(current, opts);
-    if (!u) break;
+    if (!u || (suppressPlain && u.kind === "plain")) break;
 
-    if (u.kind === "wrapped" && WRAPPERS[u.cmd] !== undefined) {
+    if (u.kind === "wrapped") {
       chain.push(u);
       current = u.innerRaw;
+      suppressPlain = true;
       continue;
     }
 
@@ -56,6 +56,7 @@ export async function unwrapDeepParsed(
       const firstStmt = innerAst.stmts[0];
       if (firstStmt?.cmd?.type === "CallExpr") {
         current = firstStmt.cmd;
+        suppressPlain = false;
       } else {
         current = undefined;
       }
