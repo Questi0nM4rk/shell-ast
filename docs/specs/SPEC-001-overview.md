@@ -77,7 +77,7 @@ The gap is solely in what gets serialized. The Go runtime already produces the f
 **What stays the same:**
 - `mvdan/sh` version lock (v3.10.0)
 - WASM compilation pipeline
-- License (MIT)
+- License (MPL-2.0)
 
 ---
 

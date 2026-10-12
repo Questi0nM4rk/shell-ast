@@ -127,7 +127,7 @@ The 0.3.1 incident — `sideEffects: false` caused the bundler to tree-shake `wa
 
 This is a single-maintainer ecosystem with a few testers. The standard OSS reflexes — defer features waiting for "user requests," design for hypothetical consumers, treat every API as forever-stable — don't apply. **The user is the consumer.** Add features when they're useful, accept break-the-API minors as natural, push back on architectural over-reach but not on "we don't have proof users want this."
 
-What stays: semver discipline (don't break minors without migration docs), honest changelogs, public packages with permissive licenses (MIT/BSD). What doesn't: API council, RFC process, deprecation cycles measured in years.
+What stays: semver discipline (don't break minors without migration docs), honest changelogs, public packages under open-source licenses (MPL-2.0 for the libraries). What doesn't: API council, RFC process, deprecation cycles measured in years.
 
 ### 7. Manual publish, no auto-publish
 

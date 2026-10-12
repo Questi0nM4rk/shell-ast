@@ -113,4 +113,6 @@ Commits include agent-authored work under my identity; design, orchestration and
 
 ## License
 
-MIT. See [NOTICE.md](./NOTICE.md) for the sh-syntax and mvdan/sh attribution.
+MPL-2.0. See [NOTICE.md](./NOTICE.md) for the sh-syntax and mvdan/sh attribution.
+
+Releases published before 2026-10-12 remain available under MIT.
