@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Jakub Lozyňskyj (Questi0nM4rk)
+Copyright (c) 2026 Jakub Lozynskyj
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This project is a fork of un-ts/sh-syntax (MIT) which itself wraps
-mvdan/sh (BSD-3). The Go processor and TypeScript surface are
-substantially rewritten; the WASM build pipeline is preserved.
-
-The vendored mvdan/sh shell parser is BSD-3-Clause licensed:
-https://github.com/mvdan/sh/blob/master/LICENSE
