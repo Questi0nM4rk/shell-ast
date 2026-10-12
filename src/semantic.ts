@@ -6,5 +6,11 @@
 // re-export) or `from "./wrappers/index.js"` for internal callers.
 
 export type { ResolvedArg, ResolvedCall } from "./flags.js";
-export type { UnwrappedCall } from "./wrappers/index.js";
+export type {
+  CustomWrapperResolution,
+  CustomWrapperResolver,
+  CustomWrapperResolverInput,
+  UnwrapOptions,
+  UnwrappedCall,
+} from "./wrappers/index.js";
 export { unwrapCall, unwrapCallParsed } from "./wrappers/index.js";

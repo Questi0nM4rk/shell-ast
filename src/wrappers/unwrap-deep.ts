@@ -9,11 +9,10 @@
 //
 // Closes BUG-008 (deferred from v0.5.0, v0.6.0; shipped v0.7.0).
 
-import type { ResolveFlagsOptions } from "../flags.js";
 import type { CallExprNode } from "../types.js";
 import { WRAPPERS } from "./registry.js";
 import type { UnwrappedCall } from "./types.js";
-import { unwrapCall } from "./unwrap.js";
+import { type UnwrapOptions, unwrapCall } from "./unwrap.js";
 
 /** Internal runaway guard against pathological inputs like
  *  `sudo sudo sudo … sudo cmd` with N huge. Consumers cap at
@@ -30,24 +29,22 @@ const MAX_CHAIN_DEPTH = 100;
  *  - Returns `[]` if `unwrapCall(call)` would return `null` on the first
  *    layer (CallExpr with no resolvable cmd).
  *  - Caps at `MAX_CHAIN_DEPTH` and returns the partial chain. */
-export function unwrapDeep(
-  call: CallExprNode,
-  opts?: ResolveFlagsOptions
-): UnwrappedCall[] {
+export function unwrapDeep(call: CallExprNode, opts?: UnwrapOptions): UnwrappedCall[] {
   const chain: UnwrappedCall[] = [];
   let current: CallExprNode | undefined = call;
+  let suppressPlain = false;
   while (current && chain.length < MAX_CHAIN_DEPTH) {
     const u = unwrapCall(current, opts);
-    if (!u) break;
+    if (!u || (suppressPlain && u.kind === "plain")) break;
     chain.push(u);
-    // Continue only when this wrapped layer's inner cmd is itself a
-    // recognized wrapper. For `sudo rm`, the next unwrap would just be
-    // `plain(rm)` — redundant with what `wrapped(sudo, cmd:rm)` already
-    // exposes. For `sudo bash` / `sudo sudo` / `doas bash`, the next
-    // layer is genuinely new information (wrapped-script, another
-    // wrapped, etc.) so we keep walking.
-    if (u.kind === "wrapped" && WRAPPERS[u.cmd] !== undefined) {
+    // Try every wrapped inner call so custom resolvers participate without a
+    // second look-ahead invocation. A built-in inner wrapper keeps its own
+    // plain layer (`sudo bash --version`), as before custom resolvers. Any
+    // other inner call is probed only for a custom match, and its plain
+    // result is redundant with the parent's `cmd`, so it is suppressed.
+    if (u.kind === "wrapped") {
       current = u.innerRaw;
+      suppressPlain = WRAPPERS[u.cmd] === undefined;
     } else {
       current = undefined;
     }

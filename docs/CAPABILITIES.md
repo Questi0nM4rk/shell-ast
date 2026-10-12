@@ -174,10 +174,11 @@ should check `chain.length` on the returned array.
 
 ## 5. Where wrapper unwrap also stops (structural, not opaque)
 
-`unwrapDeep` continues only when the current `wrapped` layer's inner command is itself a recognized wrapper. For
-`sudo rm`, the inner `rm` is `plain` — the chain returns `[wrapped(sudo, cmd:rm)]` because `plain(rm)` adds no new
-information that `wrapped` doesn't already expose. For `sudo bash`, the inner `bash` is a recognized wrapper, so the
-chain continues to `wrapped-script` or `wrapped-opaque`.
+`unwrapDeep` continues when the current `wrapped` layer's inner command matches either a built-in wrapper or the
+per-call `wrapperResolver`. For `sudo rm`, the inner `rm` is `plain` — the chain returns
+`[wrapped(sudo, cmd:rm)]` because `plain(rm)` adds no new information that `wrapped` doesn't already expose. For
+`sudo bash`, the inner `bash` is a built-in wrapper, so the chain continues to `wrapped-script` or
+`wrapped-opaque`.
 
 ---
 
@@ -201,12 +202,14 @@ Notes on the table:
 - `env`, `timeout`, `nice`, `nohup` are command-introducers (added v0.8.0): they prefix another command but do not
   interpret a script.
 
-**Not yet covered (deferred):**
+**Not built in:**
 
-- `find -exec … \;` inner-command boundary — `find` itself appears as a `CallExpr`; the `-exec` target is not unwrapped.
-- `xargs` inner-command boundary — `xargs rm` appears as a `CallExpr`; the command `xargs` passes to `rm` is not
-  re-classified as a wrapper chain. (`xargs` IS in `GLOBAL_VALUE_FLAGS` for its own flags; the inner command boundary
-  is the gap.)
+- `find -exec … \;` inner-command boundaries — a consumer resolver can select where a command starts, but the
+  synthetic inner call contains the entire remaining suffix (`rawArgs.slice(innerArgIndex)`), including the terminator
+  and anything after it. Consumers must inspect the AST to isolate even one bounded `-exec`; plural command extraction
+  also remains consumer-owned traversal.
+- `xargs` inner-command boundaries — consumers can resolve the boundary per call after applying their own xargs option
+  grammar. (`xargs` IS in `GLOBAL_VALUE_FLAGS` for its own flags; command-boundary semantics are not built in.)
 - `env -S` / `--split-string` — the string passed to `env -S` is not parsed as an argv.
 
 ---
@@ -260,6 +263,38 @@ const u = unwrapCall(sudoHelmCall, { globalFlags: { helm: ["--namespace"] } });
 // u.wrapper      === "sudo"
 // u.flagValues   === { "--namespace": ["staging"] }   ← inner helm's value-flag
 ```
+
+### The wrapper escape hatch — `UnwrapOptions.wrapperResolver`
+
+Consumers can identify command-introducing prefixes without adding tool knowledge to shell-ast's built-in registry.
+The resolver receives `{ cmd, args, raw }`; `args` contains every word after the command as a string or the `DYNAMIC`
+sentinel. Return the zero-based `innerArgIndex` where the inner command starts, or `undefined` when the call does not
+match.
+
+```ts
+import { type CustomWrapperResolver, unwrapDeep } from "@questi0nm4rk/shell-ast";
+
+const wrapperResolver: CustomWrapperResolver = ({ cmd, args }) => {
+  if (cmd === "mise" && args[0] === "x" && args[1] === "--") {
+    return { innerArgIndex: 2 };
+  }
+  if (cmd === "op" && args[0] === "run" && args[1] === "--") {
+    return { innerArgIndex: 2 };
+  }
+  return undefined;
+};
+
+const chain = unwrapDeep(call, { wrapperResolver });
+```
+
+Built-in wrappers take precedence. The resolver is immutable per-call configuration: it does not register global
+state, and recursive unwrap passes the same resolver through each layer. shell-ast validates the returned index,
+constructs the inner `CallExpr` from the original words, and preserves a dynamic inner command as `wrapped-opaque`.
+An index equal to `args.length` means the prefix matched with nothing after it (`mise x --`) and returns `plain`, the
+same as a built-in wrapper with no inner command. Any other out-of-range or non-integer index throws `RangeError`.
+
+The resolver receives `cmd` as written. `/usr/bin/mise` and `\mise` arrive unchanged, so a resolver that matches only
+`cmd === "mise"` leaves them `plain`. Normalise the name in the resolver when policy should treat them the same.
 
 ---
 

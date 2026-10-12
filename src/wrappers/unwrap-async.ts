@@ -2,10 +2,9 @@
 // inner script for `wrapped-script` results. Saves consumers from
 // re-invoking `parse()` themselves.
 
-import type { ResolveFlagsOptions } from "../flags.js";
 import type { CallExprNode, ShellFile } from "../types.js";
 import type { UnwrappedCall } from "./types.js";
-import { unwrapCall } from "./unwrap.js";
+import { type UnwrapOptions, unwrapCall } from "./unwrap.js";
 
 /** Async unwrap that additionally pre-parses the script for any
  *  `wrapped-script` result. Consumers wanting to recurse into the
@@ -16,7 +15,7 @@ import { unwrapCall } from "./unwrap.js";
 export async function unwrapCallParsed(
   call: CallExprNode,
   parse: (src: string) => Promise<ShellFile>,
-  opts?: ResolveFlagsOptions
+  opts?: UnwrapOptions
 ): Promise<UnwrappedCall | null> {
   const u = unwrapCall(call, opts);
   if (!u || u.kind !== "wrapped-script") return u;

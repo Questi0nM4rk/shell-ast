@@ -48,15 +48,19 @@ export {
   wordToParts,
 } from "./flags.js";
 
-import type { ResolveFlagsOptions } from "./flags.js";
-
 // ─── semantic.ts — discriminated UnwrappedCall ───────────────────────────────
 
-import type { UnwrappedCall } from "./semantic.js";
+import type { UnwrapOptions, UnwrappedCall } from "./semantic.js";
 import { unwrapCallParsed as _unwrapCallParsedInternal } from "./semantic.js";
 import type { CallExprNode } from "./types.js";
 
-export type { UnwrappedCall } from "./semantic.js";
+export type {
+  CustomWrapperResolution,
+  CustomWrapperResolver,
+  CustomWrapperResolverInput,
+  UnwrapOptions,
+  UnwrappedCall,
+} from "./semantic.js";
 export { unwrapCall } from "./semantic.js";
 export { isShellInterpreter, unwrapDeep, unwrapDeepParsed } from "./wrappers/index.js";
 
@@ -239,7 +243,7 @@ export async function preloadWasm(): Promise<void> {
  *  ``` */
 export function unwrapCallParsed(
   call: CallExprNode,
-  opts?: ResolveFlagsOptions
+  opts?: UnwrapOptions
 ): Promise<UnwrappedCall | null> {
   return _unwrapCallParsedInternal(call, parse, opts);
 }
