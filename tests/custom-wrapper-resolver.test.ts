@@ -157,6 +157,33 @@ describe("per-call custom wrapper resolver", () => {
     });
   });
 
+  test("treats a matched prefix with no inner command as plain", async () => {
+    const call = await callOf("mise x --");
+
+    expect(unwrapCall(call, { wrapperResolver })).toMatchObject({
+      kind: "plain",
+      cmd: "mise",
+    });
+    expect(unwrapDeep(call, { wrapperResolver })).toMatchObject([
+      { kind: "plain", cmd: "mise" },
+    ]);
+  });
+
+  test("passes cmd to the resolver as written", async () => {
+    const seen: string[] = [];
+    const recording: CustomWrapperResolver = (input) => {
+      seen.push(input.cmd);
+      return wrapperResolver(input);
+    };
+
+    const u = unwrapCall(await callOf("/usr/bin/mise x -- target"), {
+      wrapperResolver: recording,
+    });
+
+    expect(seen).toEqual(["/usr/bin/mise"]);
+    expect(u).toMatchObject({ kind: "plain", cmd: "/usr/bin/mise" });
+  });
+
   test("rejects invalid inner argument indices", async () => {
     const call = await callOf("mise x -- target");
 

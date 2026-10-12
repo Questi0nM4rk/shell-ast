@@ -290,6 +290,11 @@ const chain = unwrapDeep(call, { wrapperResolver });
 Built-in wrappers take precedence. The resolver is immutable per-call configuration: it does not register global
 state, and recursive unwrap passes the same resolver through each layer. shell-ast validates the returned index,
 constructs the inner `CallExpr` from the original words, and preserves a dynamic inner command as `wrapped-opaque`.
+An index equal to `args.length` means the prefix matched with nothing after it (`mise x --`) and returns `plain`, the
+same as a built-in wrapper with no inner command. Any other out-of-range or non-integer index throws `RangeError`.
+
+The resolver receives `cmd` as written. `/usr/bin/mise` and `\mise` arrive unchanged, so a resolver that matches only
+`cmd === "mise"` leaves them `plain`. Normalise the name in the resolver when policy should treat them the same.
 
 ---
 

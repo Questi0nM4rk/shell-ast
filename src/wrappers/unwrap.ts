@@ -212,10 +212,15 @@ function unwrapCustom(
   if (
     !Number.isInteger(innerArgIndex) ||
     innerArgIndex < 0 ||
-    innerArgIndex >= rawArgs.length
+    innerArgIndex > rawArgs.length
   ) {
-    throw new RangeError("wrapperResolver innerArgIndex must identify an argument");
+    throw new RangeError(
+      `wrapperResolver innerArgIndex must identify an argument (cmd: ${resolved.cmd}, innerArgIndex: ${innerArgIndex}, args: ${rawArgs.length})`
+    );
   }
+  // Prefix matched but nothing follows it (`mise x --`). Same as a built-in
+  // wrapper with no inner command: not really wrapping.
+  if (innerArgIndex === rawArgs.length) return plain(resolved);
 
   const innerArgs = rawArgs.slice(innerArgIndex);
   const firstInner = innerArgs[0];

@@ -232,7 +232,7 @@ const chain = unwrapDeep(findCalls(ast)[0]!, { wrapperResolver });
 // sudo → op → mise → target
 ```
 
-The resolver receives every argument after the command in source order. Static words are strings; dynamic words remain the `DYNAMIC` sentinel. `innerArgIndex` is zero-based in that array. shell-ast builds the inner `CallExpr`, applies normal flag resolution, and returns `wrapped-opaque` if the selected inner command is dynamic. Built-in wrappers take precedence, and the resolver applies only to the current call.
+The resolver receives every argument after the command in source order. Static words are strings; dynamic words remain the `DYNAMIC` sentinel. `innerArgIndex` is zero-based in that array. shell-ast builds the inner `CallExpr`, applies normal flag resolution, and returns `wrapped-opaque` if the selected inner command is dynamic. Built-in wrappers take precedence, and the resolver applies only to the current call. An index one past the last argument (`mise x --` with nothing after it) returns `plain`, like a built-in wrapper with no inner command. The resolver sees `cmd` as written, so normalise `/usr/bin/mise` or `\mise` yourself if your policy should match them.
 
 ```typescript
 // Native chains work — every extractor returns a real Array
@@ -316,7 +316,7 @@ The Go layer is intentionally minimal (~800 lines) — its only job is to expose
 
 ## Quality bar
 
-- **416 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
+- **418 TypeScript tests** + **52 Go tests** + **44-case schema completeness lock** + continuous fuzz of the serializer in CI
 - **Two regression smokes** baked into CI — compiled-binary deployment ([gh #5](https://github.com/Questi0nM4rk/shell-ast/issues/5)), consumer install from-elsewhere ([BUG-001](./docs/BUGS.md))
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `node:child_process` / `worker_threads` / `node:worker_threads` / `node:vm` / `execSync` / `spawnSync` / `Bun.spawn` / `Deno.run` / `Deno.Command` and fails the build on any match. The library parses shell strings; the test suite must never run them.
 - **Dependabot-tracked** for Go, npm, and GitHub Actions ecosystems
