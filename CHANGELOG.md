@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-12
+
+### Features
+
+- **flags:** Bash quote removal for backslashes in unquoted and double-quoted words: `r\m` and `\rm` resolve to `rm`; single quotes keep the backslash; words with expansions stay DYNAMIC
+- **wrappers:** Add the `command` builtin (`command [-p] cmd args` is wrapped; `command -v` / `-V` are lookups and stay plain)
+- **docs:** Document `resolvedCmd` as the basename helper next to the `cmd as written` contract
+
+### Changed
+
+- `wordToLit`, `resolveFlags` and the `wrapperResolver` input now see `\mise` as `mise`; before, the backslash stayed in the value
+
 ## [0.8.0] - 2026-06-05
 
 ### Features

@@ -35,6 +35,11 @@ export interface WrapperSchema {
    *  inner command — `env FOO=bar cmd`. (`env` puts its temp-env
    *  assignments in argv, not in the shell-level CallExpr.assigns.) */
   assignmentPrefix?: boolean;
+  /** Short-flag letters that turn the call into a lookup instead of an
+   *  execution: `command -v rm` prints where `rm` is and runs nothing.
+   *  A flag cluster containing any of these letters (`-v`, `-V`, `-pv`)
+   *  makes `unwrapCall` return `plain`, never `wrapped`. */
+  lookupFlagChars?: string;
 }
 
 const SHELL_SCHEMA: WrapperSchema = {
@@ -162,5 +167,12 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
   nohup: {
     flagsWithArg: new Set([]),
     longEq: false,
+  },
+  //   command [-p] cmd args - run cmd, skipping shell functions and aliases.
+  //   command -v|-V cmd     - lookup only, nothing runs: plain, not wrapped.
+  command: {
+    flagsWithArg: new Set([]),
+    longEq: false,
+    lookupFlagChars: "vV",
   },
 };

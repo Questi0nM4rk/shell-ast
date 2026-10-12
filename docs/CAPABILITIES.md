@@ -184,7 +184,7 @@ per-call `wrapperResolver`. For `sudo rm`, the inner `rm` is `plain` — the cha
 
 ## 6. Wrapper coverage
 
-All 21 recognized wrappers fall into three categories. `isShellInterpreter(name)` returns true for wrappers that carry
+All 22 recognized wrappers fall into three categories. `isShellInterpreter(name)` returns true for wrappers that carry
 a **script payload** (a `-c`-style flag or positional script args). It returns false for everything else — including
 privilege escalators and command-introducers. Basename-normalized: `isShellInterpreter("/usr/bin/bash") === true`.
 
@@ -192,15 +192,15 @@ privilege escalators and command-introducers. Basename-normalized: `isShellInter
 |---|---|---|
 | Privilege escalators | `sudo`, `doas`, `run0`, `pkexec`, `gosu`, `setpriv` | `false` |
 | Shell interpreters | `bash`, `sh`, `zsh`, `dash`, `ash`, `ksh`, `mksh`, `eval`, `su`, `runuser` | `true` |
-| Command-introducers | `env`, `timeout`, `nice`, `nohup`, `exec` | `false` |
+| Command-introducers | `env`, `timeout`, `nice`, `nohup`, `command`, `exec` | `false` |
 
 Notes on the table:
 
 - `su` and `runuser` are in the shell-interpreter row because both accept `-c "script"`.
 - `eval` is in the shell-interpreter row because its positional args are joined and re-executed as a script.
 - `exec` does not carry a script payload — it replaces the current process with its first positional arg.
-- `env`, `timeout`, `nice`, `nohup` are command-introducers (added v0.8.0): they prefix another command but do not
-  interpret a script.
+- `env`, `timeout`, `nice`, `nohup` are command-introducers (added v0.8.0), `command` since v0.9.0: they prefix another
+  command but do not interpret a script.
 
 **Not built in:**
 
@@ -293,8 +293,27 @@ constructs the inner `CallExpr` from the original words, and preserves a dynamic
 An index equal to `args.length` means the prefix matched with nothing after it (`mise x --`) and returns `plain`, the
 same as a built-in wrapper with no inner command. Any other out-of-range or non-integer index throws `RangeError`.
 
-The resolver receives `cmd` as written. `/usr/bin/mise` and `\mise` arrive unchanged, so a resolver that matches only
-`cmd === "mise"` leaves them `plain`. Normalise the name in the resolver when policy should treat them the same.
+The resolver receives `cmd` as written, after quote removal. `\mise` and `"mise"` arrive as `mise` (bash would run
+`mise`), but a path arrives unchanged: `/usr/bin/mise` stays `plain` for a resolver that matches only `cmd === "mise"`.
+Normalise the name in the resolver when policy should treat them the same, or use `resolvedCmd` below.
+
+### Getting the basename: `resolvedCmd`
+
+`cmd` on every `UnwrappedCall` and `ResolvedCall` is the command word as written (`/bin/rm`, not `rm`); that is a
+deliberate contract, so a consumer can tell a path from a bare name. `resolvedCmd(call | unwrapped)` returns the
+basename of the same word: `/bin/rm`, `/usr/bin/git` and `\rm` give `rm` and `git`, and `undefined` when the command is
+dynamic. On a `wrapped` call it answers for the INNER command (`env /bin/rm -rf x` gives `rm`); on `wrapped-script` and
+`wrapped-opaque` it answers for the wrapper. Match policy on `resolvedCmd(u)`, not on `u.cmd`.
+
+### Quote removal and `command`
+
+Unquoted and double-quoted words follow bash quote removal: `r\m`, `\rm` and `"rm"` all resolve to `rm`. Inside single
+quotes a backslash stays; inside double quotes it goes only before `$`, `` ` ``, `"`, `\` and newline. A word with an
+expansion (`r\m$x`, `$(echo rm)`) stays `DYNAMIC`.
+
+`command [-p] [--] cmd args` is a built-in wrapper (since 0.9.0): the inner `cmd` runs, skipping functions and aliases.
+`command -v cmd` and `command -V cmd` (and clusters such as `-pv`) only look a name up and execute nothing, so they are
+`plain` with `cmd: "command"`.
 
 ---
 

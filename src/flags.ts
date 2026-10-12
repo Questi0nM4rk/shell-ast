@@ -52,7 +52,7 @@ export function wordToParts(w: Word): ArgFragment[] {
   const out: ArgFragment[] = [];
   for (const p of w.parts) {
     if (p.type === "Lit") {
-      out.push({ kind: "literal", value: p.value });
+      out.push({ kind: "literal", value: removeBackslashes(p.value, false) });
       continue;
     }
     if (p.type === "SglQuoted") {
@@ -76,13 +76,39 @@ export function wordToParts(w: Word): ArgFragment[] {
   return out;
 }
 
+/** Bash quote removal for the backslashes inside a Lit part. mvdan/sh keeps
+ *  the source text of a Lit verbatim (`r\m` is Lit `r\m`), but bash runs `rm`.
+ *    unquoted:      `\X` becomes `X` for every X (`\ ` is a space, `\\` is `\`)
+ *    double-quoted: `\X` becomes `X` only for X in `$` `` ` `` `"` `\` newline;
+ *                   any other `\X` keeps its backslash
+ *  A trailing lone backslash has nothing to escape and stays. The parser
+ *  already drops backslash-newline. Single-quoted text is SglQuoted and never
+ *  passes through here. */
+function removeBackslashes(s: string, inDouble: boolean): string {
+  if (!s.includes("\\")) return s;
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (c === "\\" && i + 1 < s.length) {
+      const next = s.charAt(i + 1);
+      if (!inDouble || '$`"\\\n'.includes(next)) {
+        out += next;
+        i++;
+        continue;
+      }
+    }
+    out += c;
+  }
+  return out;
+}
+
 /** True iff every part of a DblQuoted body is statically resolvable.
  *  Returns the concatenated value when true, null otherwise. */
 function foldDblQuoted(parts: readonly Word["parts"][number][]): string | null {
   let out = "";
   for (const inner of parts) {
     if (inner.type === "Lit") {
-      out += inner.value;
+      out += removeBackslashes(inner.value, true);
     } else if (inner.type === "SglQuoted") {
       out += inner.dollar ? unescapeAnsiC(inner.value) : inner.value;
     } else {

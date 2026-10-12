@@ -1,6 +1,6 @@
 {
   "name": "@questi0nm4rk/shell-ast",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Typed AST for bash / posix / mksh, plus query helpers for tools that read commands before they run. mvdan/sh compiled to WASM, exposed as TypeScript discriminated unions.",
   "license": "MPL-2.0",
   "homepage": "https://github.com/Questi0nM4rk/shell-ast#readme",

@@ -117,6 +117,14 @@ export function unwrapCall(
         raw: call,
       };
     }
+    // Lookup flag (`command -v rm`): nothing executes, so nothing is wrapped.
+    if (
+      schema.lookupFlagChars &&
+      /^-[A-Za-z]+$/.test(lit) &&
+      [...lit.slice(1)].some((ch) => schema.lookupFlagChars?.includes(ch))
+    ) {
+      return plain(resolved);
+    }
     if (schema.longEq && lit.startsWith("--") && lit.includes("=")) {
       i++;
       continue;
