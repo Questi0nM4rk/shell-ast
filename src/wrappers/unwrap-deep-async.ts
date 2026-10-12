@@ -8,6 +8,7 @@
 // `unwrapCallParsed`) to avoid a circular import.
 
 import type { CallExprNode, ShellFile } from "../types.js";
+import { WRAPPERS } from "./registry.js";
 import type { UnwrappedCall } from "./types.js";
 import { type UnwrapOptions, unwrapCall } from "./unwrap.js";
 
@@ -40,7 +41,10 @@ export async function unwrapDeepParsed(
     if (u.kind === "wrapped") {
       chain.push(u);
       current = u.innerRaw;
-      suppressPlain = true;
+      // A built-in inner wrapper keeps its own plain layer (`sudo bash
+      // --version`), as before custom resolvers. Any other inner call is
+      // probed only for a custom match; its plain result is redundant.
+      suppressPlain = WRAPPERS[u.cmd] === undefined;
       continue;
     }
 

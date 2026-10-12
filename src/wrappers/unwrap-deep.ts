@@ -10,6 +10,7 @@
 // Closes BUG-008 (deferred from v0.5.0, v0.6.0; shipped v0.7.0).
 
 import type { CallExprNode } from "../types.js";
+import { WRAPPERS } from "./registry.js";
 import type { UnwrappedCall } from "./types.js";
 import { type UnwrapOptions, unwrapCall } from "./unwrap.js";
 
@@ -37,11 +38,13 @@ export function unwrapDeep(call: CallExprNode, opts?: UnwrapOptions): UnwrappedC
     if (!u || (suppressPlain && u.kind === "plain")) break;
     chain.push(u);
     // Try every wrapped inner call so custom resolvers participate without a
-    // second look-ahead invocation. A terminal plain result is redundant with
-    // its parent's `cmd`, so the next iteration suppresses it.
+    // second look-ahead invocation. A built-in inner wrapper keeps its own
+    // plain layer (`sudo bash --version`), as before custom resolvers. Any
+    // other inner call is probed only for a custom match, and its plain
+    // result is redundant with the parent's `cmd`, so it is suppressed.
     if (u.kind === "wrapped") {
       current = u.innerRaw;
-      suppressPlain = true;
+      suppressPlain = WRAPPERS[u.cmd] === undefined;
     } else {
       current = undefined;
     }

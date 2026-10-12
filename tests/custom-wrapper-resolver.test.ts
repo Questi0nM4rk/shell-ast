@@ -169,6 +169,22 @@ describe("per-call custom wrapper resolver", () => {
     ]);
   });
 
+  test("keeps the plain layer of a built-in wrapper used as a command", async () => {
+    for (const src of ["sudo bash --version", "mise x -- bash --version"]) {
+      const call = await callOf(src);
+      const expected = [
+        { kind: "wrapped", cmd: "bash" },
+        { kind: "plain", cmd: "bash" },
+      ];
+
+      expect(unwrapDeep(call, { wrapperResolver })).toMatchObject(expected);
+      expect(await unwrapDeepParsed(call, parse, { wrapperResolver })).toMatchObject(
+        expected
+      );
+    }
+    expect(unwrapDeep(await callOf("sudo bash --version"))).toHaveLength(2);
+  });
+
   test("passes cmd to the resolver as written", async () => {
     const seen: string[] = [];
     const recording: CustomWrapperResolver = (input) => {
