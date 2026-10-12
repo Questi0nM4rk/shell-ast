@@ -13,6 +13,8 @@ jobs:
     name: build & test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -44,7 +46,10 @@ jobs:
         run: bun run lint
 
       - name: Go tests
-        run: go test -v -race ./processor/...
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -v -race ./processor/... 2>&1 | tee "$RUNNER_TEMP/go.log"
 
       - name: Go fuzz (30s per target, smoke only)
         run: |
@@ -56,7 +61,10 @@ jobs:
           go test -run=^$ -fuzz=^FuzzSerializeWithSplitBraces$ -fuzztime=30s ./processor/
 
       - name: Bun tests
-        run: bun test
+        shell: bash
+        run: |
+          set -o pipefail
+          bun test 2>&1 | tee "$RUNNER_TEMP/test.log"
 
       - name: Doc-count drift guard
         run: bun scripts/check-doc-counts.ts
@@ -91,3 +99,27 @@ jobs:
             exit 1
           fi
           echo "OK — no execution APIs imported"
+
+      - name: Publish badges
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/test.log"
+          out="$RUNNER_TEMP/badges"; mkdir -p "$out"
+          badge() { printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"%s"}\n' "$2" "$3" "$4" > "$out/$1.json"; }
+          pass=$(grep -Eo '^ *[0-9]+ pass' "$log" | tail -1 | grep -Eo '[0-9]+' || echo 0)
+          fail=$(grep -Eo '^ *[0-9]+ fail' "$log" | tail -1 | grep -Eo '[0-9]+' || echo 0)
+          color=brightgreen; [ "$fail" != 0 ] && color=red
+          badge tests tests "$pass passed, $fail failed" "$color"
+          badge gotests "go tests" "$(grep -c '^--- PASS' "$RUNNER_TEMP/go.log") passed" brightgreen
+          badge wasm wasm "$(awk -v b=$(stat -c %s dist/shell-ast.wasm) 'BEGIN{printf "%.2f MB", b/1000000}')" 7e57c2
+          cd "$out"
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "badges for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges

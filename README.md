@@ -6,6 +6,9 @@
 
 [![npm](https://img.shields.io/npm/v/@questi0nm4rk/shell-ast?color=cb3837&label=npm)](https://www.npmjs.com/package/@questi0nm4rk/shell-ast)
 [![CI](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml/badge.svg)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/tests.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
+[![go tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/gotests.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
+[![wasm](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/wasm.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/Questi0nM4rk/shell-ast?color=blue)](./LICENSE)
 [![release](https://img.shields.io/github/v/release/Questi0nM4rk/shell-ast?display_name=tag)](https://github.com/Questi0nM4rk/shell-ast/releases)
 
@@ -41,7 +44,7 @@ $(rm -rf /)                 # CmdSubst: nested calls
 
 ## Quickstart
 
-Tested with Bun 1.3.14; the package declares Node 18+. Consumers do not need Go.
+The package declares Node 18+. Consumers do not need Go.
 
 ```bash
 bun add @questi0nm4rk/shell-ast
@@ -93,21 +96,20 @@ More: [guide](./docs/guide.md) for features and recipes, [capabilities and limit
 
 ## Numbers
 
-Measured on 2026-10-12, Arch Linux, Bun 1.3.14, Go 1.27.2.
+[![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/tests.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml) [![go tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/gotests.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml) [![wasm](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Questi0nM4rk/shell-ast/badges/wasm.json&style=flat-square)](https://github.com/Questi0nM4rk/shell-ast/actions/workflows/ci.yml)
 
-| What | Value | How measured |
-| --- | --- | --- |
-| TypeScript tests | 419 pass, 0 fail | `bun test` |
-| TypeScript test time | 0.42 to 0.44 s over 4 runs | the `Ran ... [ms]` line of `bun test` |
-| Go tests | 52 pass | `go test -count=1 -v ./processor/... \| grep -c '^--- PASS'` |
-| WASM size | 5,552,551 bytes (5.55 MB) | `stat -c %s dist/shell-ast.wasm` after `bun run build` |
-| Code size (src and processor) | 3,994 lines of code, 5,360 lines total | `scc --no-cocomo src processor` |
+| What | How to measure |
+| --- | --- |
+| TypeScript tests | `bun test` |
+| Go tests | `go test -count=1 -v ./processor/... \| grep -c '^--- PASS'` |
+| WASM size | `stat -c %s dist/shell-ast.wasm` after `bun run build` |
+| Code size (src and processor) | `scc --no-cocomo src processor` |
 
 Commits include agent-authored work under my identity; design, orchestration and review are mine.
 
 ## Status
 
-- **Works:** parse of bash, POSIX and mksh; wrapper unwrap; flag handling; the tests above. Published on npm as version 0.8.0.
+- **Works:** parse of bash, POSIX and mksh; wrapper unwrap; flag handling; the tests above.
 - **Experimental:** Deno through an `npm:` specifier. It is not in CI.
 - **Known gaps:** the result is static. Variables and command substitutions are marked as dynamic. `$PATH` lookup, aliases and shell functions are invisible, because the tree shows the command as written. Browsers are not supported. See [capabilities and limits](./docs/CAPABILITIES.md) and the [bug log](./docs/BUGS.md).
 
