@@ -1,0 +1,69 @@
+# ============================================================================
+#  release — publishes @questi0nm4rk/shell-ast when a v* tag is pushed.
+#  Auth is npm trusted publishing (OIDC): no npm token, no secrets. The
+#  package's trusted publisher on npmjs.com must name this file: release.yml.
+#  prepublishOnly (package.json) runs the full gate before the tarball ships.
+# ============================================================================
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(jq -r .version package.json)"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+
+      # prepublishOnly runs go test and the WASM build, so Go is needed here.
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          # Matches the go directive in go.mod; see ci.yml.
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Bun tests
+        run: bun test
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer; Node 24 may ship an older one.
+      - name: Upgrade npm if older than 11.5.1
+        run: |
+          installed="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$installed" | sort -V | head -n1)" != "11.5.1" ]; then
+            npm install --global npm@latest
+          fi
+          echo "npm $(npm --version)"
+
+      - name: Publish
+        run: npm publish --access public --provenance

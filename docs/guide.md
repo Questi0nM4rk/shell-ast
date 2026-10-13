@@ -230,14 +230,16 @@ go test ./processor/...
 
 ### Releasing
 
-Releases are cut manually — there is no auto-publish workflow. To ship a new version:
+A pushed `v*` tag publishes the package through `.github/workflows/release.yml`. It authenticates with npm trusted publishing (OIDC), so the repo holds no npm token. To ship a new version:
 
 ```bash
-bun run prepublishOnly         # run the full gate locally
-npm version patch              # or minor / major; bumps package.json + tag
-npm publish                    # publishConfig.access is already "public"
-git push --follow-tags
+# set "version" in package.json to X.Y.Z, then:
+git commit -am "chore: release X.Y.Z"
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
-`publishConfig.access` is set to `"public"` so the scoped package will not be silently rejected as private. Provenance attestations are off by default; turn them on per-publish with `npm publish --provenance` if running from CI with `id-token: write`.
+The workflow fails before publishing when the tag and `package.json` version differ. `prepublishOnly` runs the full gate (lint, typecheck, go test, bun test, build) before the tarball is uploaded. The publish step passes `--provenance` on the command line, which overrides the `"provenance": false` in `publishConfig`.
+
+`publishConfig.access` is set to `"public"` so the scoped package will not be silently rejected as private.
 
