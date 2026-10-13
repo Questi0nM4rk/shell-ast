@@ -129,11 +129,11 @@ This is a single-maintainer ecosystem with a few testers. The standard OSS refle
 
 What stays: semver discipline (don't break minors without migration docs), honest changelogs, public packages under open-source licenses (MPL-2.0 for the libraries). What doesn't: API council, RFC process, deprecation cycles measured in years.
 
-### 7. Manual publish, no auto-publish
+### 7. The tag is the button
 
-No GH Actions workflow auto-publishes shell-ast (or hook-kit or ai-guardrails). CI runs tests, smokes, validates. The human pushes the button. The full ritual is in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md` (9 steps).
+A `v*` tag runs `release.yml`, which tests and publishes shell-ast. Nothing publishes without a tag, and CI runs tests, smokes, validates. The human pushes the tag only after the ritual's verification has passed locally, because the workflow does not run the symbol grep or the consumer smoke. The full ritual is in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md` (9 steps).
 
-Rationale: the WASM build needs Go ≥ 1.25 (which CI is pinned to), the two CI smoke tests would catch most issues but only fire on PR, and bypassing them via direct push to main is exactly the manual-publish trap that caused 0.3.1. Keeping the publish manual makes the verification step impossible to skip.
+Rationale: the WASM build needs Go ≥ 1.25 (which CI is pinned to), the two CI smoke tests would catch most issues but only fire on PR, and bypassing them via direct push to main is exactly the manual-publish trap that caused 0.3.1. Tagging only after the local verification is how that step stays impossible to skip.
 
 ### 8. Honest disagreement, not performative agreement
 
@@ -192,7 +192,7 @@ This section is split into two subsections per a 2026-05-18 BUG-008 postmortem l
 - **shell-ast adding a `Role` vocabulary** (`fs-read`, `fs-write`, `fs-cwd`, `config`, …). shell-ast doesn't tag tokens with semantic roles. Consumer tags whatever they want.
 - **shell-ast adding a fluent `Query<T>` chain class** (LINQ-style). Native `Array.prototype` + Iterator Helpers already cover the chain case. Don't reinvent.
 - **hook-kit shipping a pre-built rule library**. hook-kit ships *primitives*, consumers ship *rules*. `examples/ai-guardrails/src/hooks.ts` is the reference for how a downstream composes them — it lives in examples, not in `src/`.
-- **GitHub Actions auto-publish workflow**. See principle 7 — manual publish is what makes the load-bearing verification step impossible to skip.
+- **Publishing on a branch push or merge.** See principle 7 — only a deliberate tag publishes, after the load-bearing verification.
 - **Default schemas / Role vocabulary / schema registry / per-tool plugin runtime**. All rejected during v0.5.0 design — see `docs/plans/v0.5.0.md` "What this release explicitly does NOT ship."
 
 ### Deferred (with revisit-conditions)

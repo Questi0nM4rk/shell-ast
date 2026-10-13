@@ -89,11 +89,11 @@ tests/
 
 `package.json` must NOT have `"sideEffects": false`. The `src/wasm.ts` side-effect import of `./wasm_exec.js` registers `globalThis.Go`; the bundler will tree-shake the IIFE if the package claims to be side-effect-free. Shipped 0.3.1 with this bug → every consumer `parse()` call threw `WasmLoadError`. Memory: `feedback_sideeffects_false_breaks_wasm.md`.
 
-## Publish ritual (manual — no auto-publish)
+## Publish ritual (the human tags; `release.yml` publishes)
 
-There is no GH Actions workflow that auto-publishes. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before `npm publish`:
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests and publishes. The workflow does not run the two checks below, so run them before you push the tag. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before you push the tag:
 
-1. **Symbol grep:** `grep -c "globalThis.Go" dist/index.js` — must be ≥ 2 (definition + check). 1 means the wasm_exec.js IIFE got tree-shaken; do NOT publish.
+1. **Symbol grep:** `grep -c "globalThis.Go" dist/index.js` — must be ≥ 2 (definition + check). 1 means the wasm_exec.js IIFE got tree-shaken; do NOT tag.
 2. **Fresh tmp consumer smoke:** copy `dist/` + `package.json` to `/tmp/smoke/node_modules/@questi0nm4rk/shell-ast/`, then `node --input-type=module -e "import('@questi0nm4rk/shell-ast').then(m => m.parse('git -C /tmp status'))"`. Verify actual runtime works.
 
 Source-side `bun test` is NOT sufficient — it runs against `src/`, not the bundled `dist/`. The 0.3.1 incident is the load-bearing lesson.
