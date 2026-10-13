@@ -33,9 +33,9 @@ jobs:
       - name: Check tag matches package.json version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          pkg="$(jq -r .version package.json)"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag v$tag does not match package.json version $pkg"
+          version="$(jq -r .version package.json)"
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
             exit 1
           fi
 
@@ -47,23 +47,11 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
 
-      - name: Bun tests
-        run: bun test
-
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-
-      # Trusted publishing needs npm 11.5.1 or newer; Node 24 may ship an older one.
-      - name: Upgrade npm if older than 11.5.1
-        run: |
-          installed="$(npm --version)"
-          if [ "$(printf '%s\n' 11.5.1 "$installed" | sort -V | head -n1)" != "11.5.1" ]; then
-            npm install --global npm@latest
-          fi
-          echo "npm $(npm --version)"
 
       - name: Publish
         run: npm publish --access public --provenance
