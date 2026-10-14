@@ -18,7 +18,7 @@ TGZ_NAME=""
 
 cleanup() {
   local rc=$?
-  rm -rf "$SCRATCH"
+  rm -rf "$SCRATCH" "$SCRATCH-bin" "$SCRATCH-elsewhere"
   [ -n "$TGZ_NAME" ] && rm -f "$REPO_ROOT/$TGZ_NAME"
   exit "$rc"
 }
@@ -32,7 +32,7 @@ cd "$REPO_ROOT"
 
 echo "[consumer-smoke] packing tarball"
 PACK_OUTPUT=$(bun pm pack 2>&1)
-TGZ_NAME=$(echo "$PACK_OUTPUT" | grep -oE 'questi0nm4rk-shell-ast-[0-9.]+\.tgz' | head -1)
+TGZ_NAME=$(echo "$PACK_OUTPUT" | grep -oE 'questi0nm4rk-shell-ast-[0-9A-Za-z.-]+\.tgz' | head -1)
 [ -n "$TGZ_NAME" ] || { echo "[consumer-smoke] couldn't determine tarball name from: $PACK_OUTPUT"; exit 1; }
 
 echo "[consumer-smoke] scratch dir: $SCRATCH"
@@ -69,4 +69,21 @@ TS
 
 echo "[consumer-smoke] running consumer script from $SCRATCH (not the repo)"
 bun run repro.ts
+
+# Bun consumer: `bun build --compile` must embed the WASM (the "bun" export
+# condition points at src/), so the binary survives the package being deleted.
+cat > entry.ts <<'TS'
+import { findCalls, parse, resolveFlags } from "@questi0nm4rk/shell-ast";
+
+const ast = await parse("echo hi | grep h");
+console.log(findCalls(ast).map((c) => resolveFlags(c)?.cmd).join(","));
+TS
+mkdir "$SCRATCH-bin" "$SCRATCH-elsewhere"
+echo "[consumer-smoke] compiling a bun consumer, then deleting the scratch package"
+bun build --compile entry.ts --outfile "$SCRATCH-bin/consumer" >/dev/null
+cd "$REPO_ROOT"
+rm -rf "$SCRATCH"
+OUT="$(cd "$SCRATCH-elsewhere" && "$SCRATCH-bin/consumer")"
+[ "$OUT" = "echo,grep" ] || { echo "[consumer-smoke] FAIL compiled binary printed: $OUT"; exit 1; }
+echo "[consumer-smoke] compiled binary OK: $OUT"
 echo "[consumer-smoke] PASS"

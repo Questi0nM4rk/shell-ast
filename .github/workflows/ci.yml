@@ -85,11 +85,8 @@ jobs:
       - name: Compile-binary smoke test (BUG-001 regression)
         run: tests/smoke/run-compile-smoke.sh
 
-      - name: Consumer-install smoke test (gh #5 regression)
+      - name: Consumer-install smoke test (gh #5 regression, bun compile embeds WASM)
         run: tests/smoke/run-consumer-install-smoke.sh
-
-      - name: Tarball smoke test (bun compile embeds WASM, node uses dist)
-        run: tests/smoke/run-tarball-smoke.sh
 
       - name: No-execution guard (test surface must never shell out)
         run: |
