@@ -1,7 +1,9 @@
 # ============================================================================
 #  release — publishes @questi0nm4rk/shell-ast when a v* tag is pushed.
 #  Auth is npm trusted publishing (OIDC): no npm token, no secrets. The
-#  package's trusted publisher on npmjs.com must name this file: release.yml.
+#  package's trusted publisher on npmjs.com names this file: release.yml, and
+#  is stage-only: the version goes to the npm stage queue, and a maintainer
+#  approves it on npmjs.com (2FA) before it is live.
 #  prepublishOnly (package.json) runs the full gate before the tarball ships.
 # ============================================================================
 name: release
@@ -53,5 +55,9 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - name: Publish
-        run: npm publish --access public --provenance
+      # `npm stage` needs npm 11.15.0 or newer; setup-node's bundled npm is older.
+      - name: Upgrade npm
+        run: npm install -g npm@^11.15.0
+
+      - name: Stage
+        run: npm stage publish --access public --provenance

@@ -91,7 +91,7 @@ tests/
 
 ## Publish ritual (the human tags; `release.yml` publishes)
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests and publishes. The workflow does not run the two checks below, so run them before you push the tag. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before you push the tag:
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests and stages the version in the npm queue; a maintainer then approves it on npmjs.com (2FA) to make it live. The workflow does not run the two checks below, so run them before you push the tag. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before you push the tag:
 
 1. **Symbol grep:** `grep -c "globalThis.Go" dist/index.js` — must be ≥ 2 (definition + check). 1 means the wasm_exec.js IIFE got tree-shaken; do NOT tag.
 2. **Fresh tmp consumer smoke:** copy `dist/` + `package.json` to `/tmp/smoke/node_modules/@questi0nm4rk/shell-ast/`, then `node --input-type=module -e "import('@questi0nm4rk/shell-ast').then(m => m.parse('git -C /tmp status'))"`. Verify actual runtime works.

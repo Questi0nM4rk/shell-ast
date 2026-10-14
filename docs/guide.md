@@ -239,7 +239,9 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The workflow fails before publishing when the tag and `package.json` version differ. `prepublishOnly` runs the full gate (lint, typecheck, go test, bun test, build) before the tarball is uploaded. The publish step passes `--provenance` on the command line, which overrides the `"provenance": false` in `publishConfig`.
+The version lands in the npm stage queue and goes live only after a maintainer approves it on npmjs.com (2FA).
+
+The workflow fails before staging when the tag and `package.json` version differ. `prepublishOnly` runs the full gate (lint, typecheck, go test, bun test, build) before the tarball is uploaded. The publish step passes `--provenance` on the command line, which overrides the `"provenance": false` in `publishConfig`.
 
 `publishConfig.access` is set to `"public"` so the scoped package will not be silently rejected as private.
 
