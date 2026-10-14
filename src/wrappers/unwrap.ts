@@ -81,6 +81,7 @@ export function unwrapCall(
   // Standard flag-walker.
   const rawArgs = call.args.slice(1);
   let leadingRemaining = schema.leadingPositionals ?? 0;
+  const lookupChars = schema.lookupFlagChars;
   let i = 0;
   while (i < rawArgs.length) {
     const arg = rawArgs[i];
@@ -119,9 +120,9 @@ export function unwrapCall(
     }
     // Lookup flag (`command -v rm`): nothing executes, so nothing is wrapped.
     if (
-      schema.lookupFlagChars &&
+      lookupChars &&
       /^-[A-Za-z]+$/.test(lit) &&
-      [...lit.slice(1)].some((ch) => schema.lookupFlagChars?.includes(ch))
+      [...lit.slice(1)].some((ch) => lookupChars.includes(ch))
     ) {
       return plain(resolved);
     }

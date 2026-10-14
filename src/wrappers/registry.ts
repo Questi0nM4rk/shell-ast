@@ -84,7 +84,7 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     longEq: false,
   },
   run0: {
-    flagsWithArg: new Set([]),
+    flagsWithArg: new Set(),
     longEq: true,
   },
   pkexec: {
@@ -92,7 +92,7 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     longEq: true,
   },
   gosu: {
-    flagsWithArg: new Set([]),
+    flagsWithArg: new Set(),
     longEq: false,
     leadingPositionals: 1,
   },
@@ -165,13 +165,12 @@ export const WRAPPERS: Readonly<Record<string, WrapperSchema>> = {
     longEq: true,
   },
   nohup: {
-    flagsWithArg: new Set([]),
+    flagsWithArg: new Set(),
     longEq: false,
   },
   //   command [-p] cmd args - run cmd, skipping shell functions and aliases.
-  //   command -v|-V cmd     - lookup only, nothing runs: plain, not wrapped.
   command: {
-    flagsWithArg: new Set([]),
+    flagsWithArg: new Set(),
     longEq: false,
     lookupFlagChars: "vV",
   },
