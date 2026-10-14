@@ -32,15 +32,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./semantic": {
       "types": "./dist/semantic.d.ts",
+      "bun": "./src/semantic.ts",
       "import": "./dist/semantic.js"
     }
   },
   "files": [
-    "dist/"
+    "dist/",
+    "src/"
   ],
   "engines": {
     "node": ">=18"
