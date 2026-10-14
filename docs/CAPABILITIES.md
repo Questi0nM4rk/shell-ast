@@ -199,7 +199,7 @@ Notes on the table:
 - `su` and `runuser` are in the shell-interpreter row because both accept `-c "script"`.
 - `eval` is in the shell-interpreter row because its positional args are joined and re-executed as a script.
 - `exec` does not carry a script payload — it replaces the current process with its first positional arg.
-- `env`, `timeout`, `nice`, `nohup` are command-introducers (added v0.8.0), `command` since v0.9.0: they prefix another
+- `env`, `timeout`, `nice`, `nohup` are command-introducers (added v0.8.0), `command` since v0.8.1-beta.0: they prefix another
   command but do not interpret a script.
 
 **Not built in:**
@@ -311,7 +311,7 @@ Unquoted and double-quoted words follow bash quote removal: `r\m`, `\rm` and `"r
 quotes a backslash stays; inside double quotes it goes only before `$`, `` ` ``, `"`, `\` and newline. A word with an
 expansion (`r\m$x`, `$(echo rm)`) stays `DYNAMIC`.
 
-`command [-p] [--] cmd args` is a built-in wrapper (since 0.9.0): the inner `cmd` runs, skipping functions and aliases.
+`command [-p] [--] cmd args` is a built-in wrapper (since 0.8.1-beta.0): the inner `cmd` runs, skipping functions and aliases.
 `command -v cmd` and `command -V cmd` (and clusters such as `-pv`) only look a name up and execute nothing, so they are
 `plain` with `cmd: "command"`.
 

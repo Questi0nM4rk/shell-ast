@@ -18,7 +18,7 @@ async function args(src: string) {
   return r;
 }
 
-describe("backslash quote removal in unquoted words (v0.9.0)", () => {
+describe("backslash quote removal in unquoted words (v0.8.1-beta.0)", () => {
   testCmd(String.raw`r\m -rf build`, { wrapper: null, cmd: "rm", flags: ["-r", "-f"] });
   testCmd(String.raw`\rm -rf build`, { wrapper: null, cmd: "rm" });
   testCmd(String.raw`rm\ -rf build`, { wrapper: null, cmd: "rm -rf" });
@@ -64,7 +64,7 @@ describe("backslash quote removal in unquoted words (v0.9.0)", () => {
   });
 });
 
-describe("command builtin (v0.9.0)", () => {
+describe("command builtin (v0.8.1-beta.0)", () => {
   testCmd("command rm -rf build", {
     wrapper: "command",
     cmd: "rm",
