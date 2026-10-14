@@ -239,6 +239,8 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+Versions are `X.Y.Z-beta.N` published under the npm dist-tag `beta` (`--tag beta`, which npm requires for a prerelease); nothing is promised in a beta.
+
 The workflow fails before staging when the tag and `package.json` version differ. `prepublishOnly` runs the full gate (WASM build, lint, typecheck, go test, bun test, TS build) before the tarball is uploaded. The stage step passes `--provenance` on the command line, which overrides the `"provenance": false` in `publishConfig`.
 
 `publishConfig.access` is set to `"public"` so the scoped package will not be silently rejected as private.

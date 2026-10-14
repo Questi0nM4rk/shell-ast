@@ -39,7 +39,7 @@ src/
   wrappers/
     registry.ts        WrapperSchema + WRAPPERS table (22 wrappers:
                        sudo/doas/pkexec/shells/eval/exec + env/timeout/
-                       nice/nohup command-introducers since 0.8.0, command since 0.9.0)
+                       nice/nohup command-introducers since 0.8.0, command since 0.8.1-beta.0)
     classify.ts        isShellInterpreter(name) predicate (since 0.8.0):
                        registry-derived, basename-normalized
     types.ts           UnwrappedCall discriminated union (plain / wrapped /
@@ -91,7 +91,7 @@ tests/
 
 ## Publish ritual (the human tags; `release.yml` publishes)
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests and stages the version in the npm queue; a maintainer then approves it on npmjs.com (2FA) to make it live. The workflow does not run the two checks below, so run them before you push the tag. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before you push the tag:
+Versions are `X.Y.Z-beta.N` under the npm dist-tag `beta`; nothing is promised in a beta. Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests and stages the version in the npm queue; a maintainer then approves it on npmjs.com (2FA) to make it live. The workflow does not run the two checks below, so run them before you push the tag. Full 9-step ritual in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md`. Mandatory verification before you push the tag:
 
 1. **Symbol grep:** `grep -c "globalThis.Go" dist/index.js` — must be ≥ 2 (definition + check). 1 means the wasm_exec.js IIFE got tree-shaken; do NOT tag.
 2. **Fresh tmp consumer smoke:** copy `dist/` + `package.json` to `/tmp/smoke/node_modules/@questi0nm4rk/shell-ast/`, then `node --input-type=module -e "import('@questi0nm4rk/shell-ast').then(m => m.parse('git -C /tmp status'))"`. Verify actual runtime works.
@@ -104,7 +104,7 @@ Source-side `bun test` is NOT sufficient — it runs against `src/`, not the bun
 
 - **452 TypeScript tests** via `bun test`. Per-feature files (`tests/extract.test.ts`, `tests/semantic.test.ts`, `tests/query.test.ts`, `tests/flag-values.test.ts`, `tests/resolve-flags-options.test.ts`, `tests/global-flags.test.ts`, `tests/v0.3.0-surface.test.ts`, `tests/types-drift.test.ts`, `tests/parse.test.ts`, `tests/helpers.test.ts`, `tests/security.test.ts`, `tests/wasm.test.ts`, `tests/classify.test.ts`, `tests/wrappers-command-intro.test.ts`, `tests/custom-wrapper-resolver.test.ts`, `tests/backslash-and-command.test.ts`).
 - **52 Go tests** + **44-case schema completeness lock** via `go test ./processor/...`. The schema lock fails if mvdan/sh adds a node type that our serializer doesn't cover. CI also runs a 30s fuzz of the serializer.
-- **`tests/smoke/`** — `run-compile-smoke.sh` validates the `bun build --compile` deployment path (BUG-001 regression). `run-consumer-install-smoke.sh` validates the consumer-install path (gh #5 regression). Both run in CI. **Run them locally if you're touching anything WASM-load-shaped.**
+- **`tests/smoke/`** — `run-compile-smoke.sh` validates the `bun build --compile` deployment path (BUG-001 regression). `run-consumer-install-smoke.sh` validates the consumer-install path (gh #5 regression). `run-tarball-smoke.sh` packs the tarball and proves a `bun build --compile` consumer embeds the WASM (via the `bun` export condition to `src/`) and Node uses `dist/`. All three run in CI. **Run them locally if you're touching anything WASM-load-shaped.**
 - **No process execution at the test surface** — CI greps the source tree for `child_process` / `Bun.spawn` / `execSync` / `spawnSync` / `Deno.run` / `Deno.Command` / `worker_threads` / `node:vm` / etc. and fails on any match. We parse shell strings; we don't run them.
 - **Tests-first for new features.** v0.5.0 is the working template — see `docs/plans/v0.5.0.md` order-of-work section.
 
