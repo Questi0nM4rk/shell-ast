@@ -131,7 +131,7 @@ What stays: semver discipline (don't break minors without migration docs), hones
 
 ### 7. The tag is the button
 
-A `v*` tag runs `release.yml`, which tests and stages shell-ast in the npm queue; a maintainer approves it on npmjs.com (2FA) before it is live. Nothing is staged without a tag, and CI runs tests, smokes, validates. The human pushes the tag only after the ritual's verification has passed locally, because the workflow does not run the symbol grep or the consumer smoke. The full ritual is in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md` (9 steps).
+A `v*` tag runs `release.yml`, which tests and stages shell-ast on npm. Nothing is staged without a tag, and CI runs tests, smokes, validates. The human pushes the tag only after the ritual's verification has passed locally, because the workflow does not run the symbol grep or the consumer smoke. The full ritual is in `~/.claude/projects/-home-qs-m4rk-Projects-shell-ast/memory/project_publish_ritual.md` (9 steps).
 
 Rationale: the WASM build needs Go ≥ 1.25 (which CI is pinned to), the two CI smoke tests would catch most issues but only fire on PR, and bypassing them via direct push to main is exactly the manual-publish trap that caused 0.3.1. Tagging only after the local verification is how that step stays impossible to skip.
 
