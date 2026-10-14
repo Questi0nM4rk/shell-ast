@@ -230,7 +230,7 @@ go test ./processor/...
 
 ### Releasing
 
-A pushed `v*` tag publishes the package through `.github/workflows/release.yml`. It authenticates with npm trusted publishing (OIDC), so the repo holds no npm token. To ship a new version:
+A pushed `v*` tag stages the package in the npm queue (a maintainer approves it on npmjs.com with 2FA) through `.github/workflows/release.yml`. It authenticates with npm trusted publishing (OIDC), so the repo holds no npm token. To ship a new version:
 
 ```bash
 # set "version" in package.json to X.Y.Z, then:
@@ -238,8 +238,6 @@ git commit -am "chore: release X.Y.Z"
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
-
-The version lands in the npm stage queue and goes live only after a maintainer approves it on npmjs.com (2FA).
 
 The workflow fails before staging when the tag and `package.json` version differ. `prepublishOnly` runs the full gate (lint, typecheck, go test, bun test, build) before the tarball is uploaded. The publish step passes `--provenance` on the command line, which overrides the `"provenance": false` in `publishConfig`.
 
